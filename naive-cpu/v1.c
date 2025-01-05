@@ -5,7 +5,7 @@
 #include <string.h>
 
 #define INPUT_SIZE 784
-#define HIDDEN_SIZE 1
+#define HIDDEN_SIZE 256
 #define OUTPUT_SIZE 10
 #define TRAIN_SIZE 10000
 #define TEST_SIZE 1000
