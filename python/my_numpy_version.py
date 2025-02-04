@@ -73,7 +73,7 @@ class Linear:
         return np.random.randn(input_size, output_size) * np.sqrt(2 / input_size)
 
     def initialize_bias(output_size):
-        return np.empty((1, output_size))
+        return np.zeros((1, output_size))
 
     def __call__(self, x: np.ndarray):
         return self.forward(x)
