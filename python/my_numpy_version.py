@@ -10,6 +10,9 @@ from torch.utils.data import DataLoader
 from torchvision import datasets,transforms
 from dataclasses import dataclass
 
+from rich.progress import Progress
+from rich.jupyter import print
+
 
 # In[2]:
 
@@ -41,7 +44,7 @@ test_dataset = datasets.MNIST(
 
 
 train_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=True)
-test_loader = DataLoader(dataset=test_dataset, batch_size=batch_size, shuffle=True)
+test_loader = DataLoader(dataset=test_dataset, batch_size=len(test_dataset), shuffle=True)
 
 
 # In[5]:
@@ -88,7 +91,6 @@ class Linear:
         # TODO: 搞清楚grad_output的维度
         grad_bias = np.sum(grad_output, axis=0, keepdims=True)
         grad_input = grad_output @ self.weights.T
-        # breakpoint()
         self.grad_weights[:] = grad_weights[:]
         self.grad_bias[:] = grad_bias[:]
         self.grad_input[:] = grad_input[:]
@@ -162,6 +164,7 @@ class CrossEntropyLoss:
         return self.forward(input=input,target=target)
 
 
+
 # In[9]:
 
 
@@ -208,6 +211,16 @@ class MLP:
         fc2_output = self.fc2(relu_output)
         return fc2_output, (fc1_input, fc1_output, relu_output)
 
+    def eval(self,x:np.ndarray):
+        fc1_input = x.reshape(-1, 28 * 28)
+        fc1_output = self.fc1(fc1_input)
+        relu_output = self.relu(fc1_output)
+        fc2_output = self.fc2(relu_output)
+        return fc2_output
+
+
+
+
     def backward(self, grad_output, cache):
         fc1_input, fc1_output, relu_output = cache
         # 计算线性层fc2的梯度
@@ -231,7 +244,7 @@ class MLP:
 # In[11]:
 
 
-def train(model: MLP, train_loader: DataLoader, learning_rate: float, epochs: int):
+def train(model: MLP, train_loader: DataLoader, test_loader:DataLoader, learning_rate: float, epochs: int):
     optimizer = Optimizer(
         learning_rate=learning_rate,
         linear_weight1=model.fc1.weights,
@@ -245,21 +258,32 @@ def train(model: MLP, train_loader: DataLoader, learning_rate: float, epochs: in
     )
     criterion = CrossEntropyLoss()
 
-    for epoch in range(epochs):
-        print(f"Epoch {epoch+1}/{epochs}")
-        for i, (images, labels) in enumerate(train_loader):
-            y_pred, cache = model(x=images)
-            #计算loss
-            ce_loss=criterion(input=y_pred,target=labels)
-            print(f"loss = {ce_loss}")
-            softmax_probs = model.softmax(input=y_pred)
-            y_true_one_hot = np.zeros_like(y_pred)
-            y_true_one_hot[range(batch_size), labels] = 1
+    test_images,test_labels=next(iter(test_loader))
+    print(f"test_images.shape: {test_images.shape}, test_labels.shape: {test_labels.shape}")
 
-            grad_output = softmax_probs - y_true_one_hot
-            model.backward(grad_output=grad_output, cache=cache)
-            optimizer.update_weights()
-        
+    for epoch in range(epochs):
+        # print(f"Epoch {epoch+1}/{epochs}")
+        with Progress() as progress:
+            training_task=progress.add_task(f"Training epoch {epoch+1}/{epochs}",total=len(train_dataset)/batch_size)
+            for i, (images, labels) in enumerate(train_loader):
+                y_pred, cache = model(x=images)
+                #计算loss
+                ce_loss=criterion(input=y_pred,target=labels)
+                # print(f"loss = {ce_loss}")
+                progress.update(training_task,advance=1,description=f"Training epoch {epoch+1}/{epochs}, "+ f"loss = {ce_loss}")
+                softmax_probs = model.softmax(input=y_pred)
+                y_true_one_hot = np.zeros_like(y_pred)
+                y_true_one_hot[range(batch_size), labels] = 1
+
+                grad_output = softmax_probs - y_true_one_hot
+                model.backward(grad_output=grad_output, cache=cache)
+                optimizer.update_weights()
+            test_pred = model.eval(x=test_images)
+            test_loss=criterion(test_pred,test_labels)
+            accuracy=np.mean(np.argmax(test_pred,axis=1)==test_labels.numpy())
+            print(f"Epoch {epoch+1} - Test Loss: {test_loss}, Test Accuracy: {accuracy}")
+            
+            
 
 
 # In[12]:
@@ -273,5 +297,5 @@ model = MLP(
 )
 epochs=3
 learning_rate=1e-3
-train(model=model,train_loader=train_loader,learning_rate=learning_rate,epochs=epochs)
+train(model=model,train_loader=train_loader,test_loader=test_loader,learning_rate=learning_rate,epochs=epochs)
 
