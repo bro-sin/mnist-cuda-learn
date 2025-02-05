@@ -6,6 +6,8 @@ const PICTURE_WIDTH: usize = 28;
 const PICTURE_HEIGHT: usize = 28;
 const PICTURE_SIZE: usize = PICTURE_WIDTH * PICTURE_HEIGHT;
 const LABEL_SIZE: usize = 1;
+const TRAIN_SIZE: usize = 6e4 as usize;
+const TEST_SIZE: usize = 1e4 as usize;
 
 struct DataSet {
     images_file_path: String,
@@ -86,11 +88,20 @@ fn main() -> io::Result<()> {
     let mut train_dataset: DataSet = DataSet {
         images_file_path: "../mnist_data/X_train.bin".to_string(),
         labels_file_path: "../mnist_data/y_train.bin".to_string(),
-        num_elements: 10000,
+        num_elements: TRAIN_SIZE,
         images_data: None,
         labels_data: None,
     };
     train_dataset.load_data()?;
     train_dataset.show_random();
+    let mut test_dataset: DataSet = DataSet {
+        images_file_path: "../mnist_data/X_test.bin".to_string(),
+        labels_file_path: "../mnist_data/y_test.bin".to_string(),
+        num_elements: TEST_SIZE,
+        images_data: None,
+        labels_data: None,
+    };
+    test_dataset.load_data()?;
+    test_dataset.show_random();
     Ok(())
 }
