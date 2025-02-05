@@ -3,6 +3,6 @@ data
 python/data
 python/venv
 .vscode
-.gitignore
+# .gitignore
 mnist_data
 dev
