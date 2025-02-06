@@ -84,7 +84,111 @@ impl DataSet {
     }
 }
 
-fn main() -> io::Result<()> {
+struct Matrix {
+    data: Vec<f32>,
+    row_major: bool,
+    rows_num: usize,
+    cols_num: usize,
+}
+
+impl Matrix {
+    fn zeros(row: usize, col: usize) -> Self {
+        Self {
+            data: vec![0.0; row * col],
+            row_major: true,
+            rows_num: row,
+            cols_num: col,
+        }
+    }
+    fn transpose(&mut self) {
+        self.row_major = !self.row_major;
+        (self.rows_num, self.cols_num) = (self.cols_num, self.rows_num);
+    }
+    fn get_transpose_matrix(&self) -> Self {
+        Self {
+            data: self.data.clone(),
+            row_major: !self.row_major,
+            rows_num: self.cols_num,
+            cols_num: self.rows_num,
+        }
+    }
+    fn get_index(&self, row: usize, col: usize) -> usize {
+        if self.row_major {
+            return row * self.cols_num + col;
+        } else {
+            return col * self.rows_num + row;
+        }
+    }
+    fn get_item(&self, row: usize, col: usize) -> f32 {
+        return self.data[self.get_index(row, col)];
+    }
+    fn set_item(&mut self, row: usize, col: usize, new_item: f32) {
+        let _index = self.get_index(row, col);
+        self.data[_index] = new_item;
+    }
+    fn show(&self) {
+        println!(
+            "The matrix with {} rows and {} columns is as follows:",
+            self.rows_num, self.cols_num
+        );
+        for row in 0..self.rows_num {
+            for col in 0..self.cols_num {
+                print!("{:5.2}\t", self.get_item(row, col));
+            }
+            print!("\n");
+        }
+        print!("\n");
+    }
+    fn multiply(&self, other: &Self) -> Self {
+        assert_eq!(
+            self.cols_num, other.rows_num,
+            "Incompatible matrix dimensions for multiplication"
+        );
+        let mut result_matrix = Self::zeros(self.rows_num, other.cols_num);
+        for row in 0..self.rows_num {
+            for col in 0..other.cols_num {
+                let result_index = result_matrix.get_index(row, col);
+                for dot_index in 0..self.cols_num {
+                    result_matrix.data[result_index] +=
+                        self.get_item(row, dot_index) * other.get_item(dot_index, col);
+                }
+            }
+        }
+        result_matrix
+    }
+}
+
+struct Linear {
+    input_features: usize,
+    output_features: usize,
+    with_bias: bool,
+    weights: Vec<f32>,
+    bias: Vec<f32>,
+    grad_weights: Vec<f32>,
+    grad_bias: Vec<f32>,
+    grad_input: Vec<f32>,
+}
+
+impl Linear {
+    fn initialize_weights(&mut self) {
+        let mut rng = rand::rng();
+        // let mut weights = &self.weights;
+        let weights_size = self.weights.len();
+        let scale = f32::sqrt(2.0 / weights_size as f32);
+        for i in 0..weights_size {
+            // self.weights[i] = rng.random_range(0.0..1.0) * scale; //这里能不能调用默认的random?确认返回的是不是0-1之间的数
+            self.weights[i] = rng.random::<f32>() * scale; //f32的random方法返回的就是0-1的数，应该是标准正态分布
+        }
+    }
+    fn initialize_bias(&mut self) {
+        for i in 0..self.bias.len() {
+            self.bias[i] = 0f32;
+        }
+    }
+    fn forward(&self, input: &Vec<f32>, output: &mut Vec<f32>) {}
+}
+
+fn test_dataset_load() -> io::Result<()> {
     let mut train_dataset: DataSet = DataSet {
         images_file_path: "../mnist_data/X_train.bin".to_string(),
         labels_file_path: "../mnist_data/y_train.bin".to_string(),
@@ -103,5 +207,34 @@ fn main() -> io::Result<()> {
     };
     test_dataset.load_data()?;
     test_dataset.show_random();
+    Ok(())
+}
+
+fn test_matrix_show() {
+    let mut matrix = Matrix {
+        data: vec![
+            1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
+        ],
+        row_major: true,
+        rows_num: 3,
+        cols_num: 4,
+    };
+    matrix.show();
+    matrix.transpose();
+    matrix.show();
+
+    let mut test_zeros = Matrix::zeros(5, 6);
+    test_zeros.show();
+    test_zeros.transpose();
+    test_zeros.show();
+
+    let b = matrix.get_transpose_matrix();
+    let c = b.multiply(&matrix);
+    c.show();
+}
+
+fn main() -> io::Result<()> {
+    test_dataset_load()?;
+    test_matrix_show();
     Ok(())
 }
