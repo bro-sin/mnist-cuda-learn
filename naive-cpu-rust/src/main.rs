@@ -84,6 +84,11 @@ impl DataSet {
     }
 }
 
+enum Axis {
+    Row,
+    Column,
+}
+
 struct Matrix {
     data: Vec<f32>,
     row_major: bool,
@@ -100,6 +105,15 @@ impl Matrix {
             cols_num: col,
         }
     }
+    fn ones(row: usize, col: usize) -> Self {
+        Self {
+            data: vec![1.0; row * col],
+            row_major: true,
+            rows_num: row,
+            cols_num: col,
+        }
+    }
+
     fn transpose(&mut self) {
         self.row_major = !self.row_major;
         (self.rows_num, self.cols_num) = (self.cols_num, self.rows_num);
@@ -156,36 +170,107 @@ impl Matrix {
         }
         result_matrix
     }
+
+    fn add(&mut self, other: &Self) {
+        assert_eq!(
+            self.rows_num, other.rows_num,
+            "Incompatible rows for addition: self.rows_num = {}, other.rows_num = {}",
+            self.rows_num, other.rows_num
+        );
+        assert_eq!(
+            self.cols_num, other.cols_num,
+            "Incompatible columns for addition: self.cols_num = {}, other.cols_num = {}",
+            self.cols_num, other.cols_num
+        );
+        let length = self.data.len();
+        for i in 0..length {
+            self.data[i] += other.data[i];
+        }
+    }
+
+    fn sum(&self, axis: Axis) -> Self {
+        match axis {
+            //按行方向求和压缩
+            Axis::Row => {
+                let mut result_matrix = Self::zeros(1, self.cols_num);
+                for col in 0..self.cols_num {
+                    let mut tmp_sum = 0f32;
+                    for row in 0..self.rows_num {
+                        tmp_sum += self.get_item(row, col);
+                    }
+                    result_matrix.set_item(1, col, tmp_sum);
+                }
+                result_matrix
+            }
+            Axis::Column => {
+                let mut result_matrix = Self::zeros(self.rows_num, 1);
+                for row in 0..self.rows_num {
+                    let mut tmp_sum = 0f32;
+                    for col in 0..self.cols_num {
+                        tmp_sum += self.get_item(row, col);
+                    }
+                    result_matrix.set_item(row, 1, tmp_sum);
+                }
+                result_matrix
+            }
+        }
+    }
 }
 
 struct Linear {
     input_features: usize,
     output_features: usize,
-    with_bias: bool,
-    weights: Vec<f32>,
-    bias: Vec<f32>,
-    grad_weights: Vec<f32>,
-    grad_bias: Vec<f32>,
-    grad_input: Vec<f32>,
+    with_bias: bool, //留着，但是这里都按true来处理
+    weights: Matrix,
+    bias: Matrix,
+    grad_weights: Matrix,
+    grad_bias: Matrix,
+    grad_input: Matrix,
 }
 
 impl Linear {
+    fn new(input_features: usize, output_features: usize) -> Self {
+        Self {
+            input_features: input_features,
+            output_features: output_features,
+            with_bias: true,
+            weights: Matrix::zeros(output_features, input_features),
+            bias: Matrix::zeros(output_features, 1),
+            grad_weights: Matrix::zeros(output_features, input_features),
+            grad_bias: Matrix::zeros(output_features, 1),
+            grad_input: Matrix::zeros(input_features, 1),
+        }
+    }
     fn initialize_weights(&mut self) {
         let mut rng = rand::rng();
-        // let mut weights = &self.weights;
-        let weights_size = self.weights.len();
+        let weights_size = self.weights.data.len();
         let scale = f32::sqrt(2.0 / weights_size as f32);
         for i in 0..weights_size {
-            // self.weights[i] = rng.random_range(0.0..1.0) * scale; //这里能不能调用默认的random?确认返回的是不是0-1之间的数
-            self.weights[i] = rng.random::<f32>() * scale; //f32的random方法返回的就是0-1的数，应该是标准正态分布
+            self.weights.data[i] = rng.random::<f32>() * scale; //f32的random方法返回的就是0-1的数，应该是标准正态分布
         }
     }
     fn initialize_bias(&mut self) {
-        for i in 0..self.bias.len() {
-            self.bias[i] = 0f32;
-        }
+        //就是0，不用改
     }
-    fn forward(&self, input: &Vec<f32>, output: &mut Vec<f32>) {}
+    fn init_paramers(&mut self) {
+        self.initialize_weights();
+        self.initialize_bias();
+    }
+
+    fn forward(&self, input: &Matrix) -> Matrix {
+        //z=wx+b
+        let mut output = self.weights.multiply(input);
+        output.add(&self.bias);
+        output
+    }
+
+    fn backward(&mut self, grad_output: &Matrix, input: &Matrix) {
+        //w[m,n]= y[m,batch_size]@x.T[batch_size,n]
+        self.grad_weights = grad_output.multiply(&input.get_transpose_matrix());
+        self.grad_bias = grad_output.sum(Axis::Column);
+        // grad_x[n,1] = w.T[n,m] @ grad_out[m,1]
+        self.grad_input = self.weights.get_transpose_matrix().multiply(grad_output);
+    }
 }
 
 fn test_dataset_load() -> io::Result<()> {
@@ -231,10 +316,26 @@ fn test_matrix_show() {
     let b = matrix.get_transpose_matrix();
     let c = b.multiply(&matrix);
     c.show();
+
+    let one1 = Matrix::ones(4, 3);
+    let mut two = Matrix::ones(4, 3);
+    two.show();
+    two.add(&one1);
+    two.show();
+}
+
+fn test_linear() {
+    let mut linear = Linear::new(3, 5);
+    linear.init_paramers();
+    let input = Matrix::ones(3, 1);
+    input.show();
+    let output = linear.forward(&input);
+    output.show();
 }
 
 fn main() -> io::Result<()> {
-    test_dataset_load()?;
-    test_matrix_show();
+    // test_dataset_load()?;
+    // test_matrix_show();
+    test_linear();
     Ok(())
 }
