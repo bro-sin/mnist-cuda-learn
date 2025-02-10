@@ -89,6 +89,7 @@ enum Axis {
     Column,
 }
 
+#[derive(Clone)]
 struct Matrix {
     data: Vec<f32>,
     row_major: bool,
@@ -104,6 +105,9 @@ impl Matrix {
             rows_num: row,
             cols_num: col,
         }
+    }
+    fn zeros_like(temple_matrix: &Self) -> Self {
+        Self::zeros(temple_matrix.rows_num, temple_matrix.cols_num)
     }
     fn ones(row: usize, col: usize) -> Self {
         Self {
@@ -270,6 +274,106 @@ impl Linear {
         self.grad_bias = grad_output.sum(Axis::Column);
         // grad_x[n,1] = w.T[n,m] @ grad_out[m,1]
         self.grad_input = self.weights.get_transpose_matrix().multiply(grad_output);
+    }
+}
+
+// trait SoftMax {
+//     fn softmax_forward(&self) -> Self;
+//     // fn softmax_backward(&self) -> Self;
+// }
+
+// trait ReLU {
+//     fn relu_forward(&self) -> Self;
+//     fn relu_backward(&self) -> Self;
+// }
+
+struct SoftMax {}
+impl SoftMax {
+    fn forward(&self, input: &Matrix) -> Matrix {
+        //input[m,batch_size]
+        //对其中的m个元素（一列）做softmax
+        let batch_size = input.cols_num;
+        let mut output = input.clone();
+        for batch_index in 0..batch_size {
+            //先找这一列最大的
+            let mut max_element: f32 = input.get_item(0, batch_index);
+            for row in 1..input.rows_num {
+                if input.get_item(row, batch_index) > max_element {
+                    max_element = input.get_item(row, batch_index);
+                }
+            }
+
+            //算一下这一列减去最大值后的exp的和
+            let mut sum: f32 = 0f32;
+            for row in 0..input.rows_num {
+                let exp_result = f32::exp(input.get_item(row, batch_index) - max_element);
+                output.set_item(row, batch_index, exp_result);
+                sum += exp_result;
+            }
+
+            //将结果除以这个sum
+            for row in 0..input.rows_num {
+                let finial_result = output.get_item(row, batch_index) / sum;
+                output.set_item(row, batch_index, finial_result);
+            }
+        }
+        output
+    }
+}
+
+struct ReLU {}
+
+impl ReLU {
+    fn forward(&self, input: &Matrix) -> Matrix {
+        let mut output = input.clone();
+        for index in 0..output.data.len() {
+            if output.data[index] < 0f32 {
+                output.data[index] = 0f32;
+            }
+        }
+        output
+    }
+    fn backward(&self, grad_output: &Matrix, input: &Matrix) -> Matrix {
+        assert_eq!(
+            grad_output.data.len(),
+            input.data.len(),
+            "Incompatitable grad_output and input"
+        );
+        let mut new_grad = grad_output.clone();
+        for index in 0..new_grad.data.len() {
+            if input.data[index] <= 0f32 {
+                new_grad.data[index] = 0f32;
+            }
+        }
+        new_grad
+    }
+}
+
+struct CrossEntropyLoss {
+    softmax: SoftMax,
+}
+
+impl CrossEntropyLoss {
+    fn forward(&self, input: &Matrix, target: &Matrix) -> f32 {
+        //target[batchsize,1]，每一个图像真实的label
+        let input_probs = self.softmax.forward(input);
+        //input_probs[10,batchsize]，每一个列向量是一个输出，表示对这个图像预测的各个数字概率大小
+        assert_eq!(
+            input.cols_num, target.rows_num,
+            "The number of classes of input and target is not competitable"
+        );
+
+        // let mut correct_class_probs = Matrix::zeros_like(target);
+        //correct_class_probs [batchsize,1]，每一个图像真实label预测正确的概率
+
+        let mut log_sum = 0f32;
+        for i in 0..target.rows_num {
+            let max_prob_index = target.get_item(i, 0) as usize;
+            let max_prob = input_probs.get_item(max_prob_index, i);
+            // correct_class_probs.set_item(row, col, new_item);
+            log_sum += f32::ln(max_prob);
+        }
+        log_sum / target.rows_num as f32
     }
 }
 
