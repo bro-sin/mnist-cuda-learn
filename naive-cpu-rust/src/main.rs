@@ -352,9 +352,11 @@ impl Linear {
     }
 
     fn update_weights(&mut self, learning_rate: f32) {
-        self.grad_weights.multiply_scale(-learning_rate);
+        //w=w-grad_w*learning_rate
+        self.grad_weights.multiply_scale(learning_rate);
         self.weights.subtract(&self.grad_weights);
-        self.grad_bias.multiply_scale(-learning_rate);
+        //b=b-grad_b*learning_rate
+        self.grad_bias.multiply_scale(learning_rate);
         self.bias.subtract(&self.grad_bias);
     }
 }
