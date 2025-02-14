@@ -224,9 +224,15 @@ impl Matrix {
             "Incompatible columns for addition: self.cols_num = {}, other.cols_num = {}",
             self.cols_num, other.cols_num
         );
-        let length = self.data.len();
-        for i in 0..length {
-            self.data[i] += other.data[i];
+        // let length = self.data.len();
+        // for i in 0..length {
+        //     self.data[i] += other.data[i];
+        // }
+        for row in 0..self.rows_num {
+            for col in 0..self.cols_num {
+                let new_item = self.get_item(row, col) + other.get_item(row, col);
+                self.set_item(row, col, new_item);
+            }
         }
     }
     fn add_bias(&mut self, other: &Self) {
@@ -259,9 +265,15 @@ impl Matrix {
             "Incompatible columns for subtraction: self.cols_num = {}, other.cols_num = {}",
             self.cols_num, other.cols_num
         );
-        let length = self.data.len();
-        for i in 0..length {
-            self.data[i] -= other.data[i];
+        // let length = self.data.len();
+        // for i in 0..length {
+        //     self.data[i] -= other.data[i];
+        // }
+        for row in 0..self.rows_num {
+            for col in 0..self.cols_num {
+                let new_item = self.get_item(row, col) - other.get_item(row, col);
+                self.set_item(row, col, new_item);
+            }
         }
     }
 
@@ -540,15 +552,15 @@ impl MLP {
                     //计算正确预测的个数
                     for i in 0..BATCH_SIZE {
                         let label = train_labels.get_item(i, 0) as usize;
-                        let mut max_prob = 0f32;
-                        let mut max_index = 0;
-                        for j in 0..10 {
-                            if softmax_probs.get_item(j, i) > max_prob {
-                                max_prob = softmax_probs.get_item(j, i);
-                                max_index = j;
+                        let mut predicted_index = 0;
+                        for j in 1..10 {
+                            if softmax_probs.get_item(j, i)
+                                > softmax_probs.get_item(predicted_index, i)
+                            {
+                                predicted_index = j;
                             }
                         }
-                        if max_index == label {
+                        if predicted_index == label {
                             correct += 1;
                         }
                     }
