@@ -461,7 +461,7 @@ impl CrossEntropyLoss {
             // correct_class_probs.set_item(row, col, new_item);
             log_sum += f32::ln(max_prob);
         }
-        log_sum / target.rows_num as f32
+        -log_sum / target.rows_num as f32 // 交叉熵是算的对数平均的相反数
     }
 }
 
@@ -473,6 +473,7 @@ struct MLP {
     relu: ReLU,
     fc2: Linear,
     softmax: SoftMax,
+    cross_entropy_loss: CrossEntropyLoss,
 }
 
 impl MLP {
@@ -485,6 +486,7 @@ impl MLP {
             relu: ReLU {},
             fc2: Linear::new(hidden_features, num_classes),
             softmax: SoftMax {},
+            cross_entropy_loss: CrossEntropyLoss::new(),
         }
     }
 
@@ -518,12 +520,9 @@ impl MLP {
         let num_batches = train_data.num_elements / BATCH_SIZE;
         for epoch in 0..epochs {
             //训练的轮数
-            let total_loss = 0f32;
+            let mut total_loss = 0f32;
+            let mut correct: u32 = 0;
             for batch_index in 0..num_batches {
-                println!(
-                    "Epoch: {}/{}, batch: {}/{}",
-                    epoch, epochs, batch_index, num_batches
-                );
                 //这里batch_index指的是在num_batches这么多个batch中的第几个
                 //将数据分成多个batch，每一次由BATCH_SIZE个样本进行前向传播和反向传播，然后更新参数
                 if let (Some(train_images), Some(train_labels)) =
@@ -532,7 +531,26 @@ impl MLP {
                     let cache = self.forward(&train_images);
                     //根据crossentropyloss的反向传播，计算出grad_output
                     let y_pred = &cache[0]; //这是没有经过softmax的输出
+                    let loss = self.cross_entropy_loss.forward(y_pred, &train_labels);
+                    total_loss += loss;
                     let mut softmax_probs = self.softmax.forward(y_pred);
+
+                    //计算正确预测的个数
+                    for i in 0..BATCH_SIZE {
+                        let label = train_labels.get_item(i, 0) as usize;
+                        let mut max_prob = 0f32;
+                        let mut max_index = 0;
+                        for j in 0..10 {
+                            if softmax_probs.get_item(j, i) > max_prob {
+                                max_prob = softmax_probs.get_item(j, i);
+                                max_index = j;
+                            }
+                        }
+                        if max_index == label {
+                            correct += 1;
+                        }
+                    }
+
                     let mut y_true_one_hot = Matrix::zeros_like(&softmax_probs);
                     for i in 0..BATCH_SIZE {
                         let label = train_labels.get_item(i, 0) as usize;
@@ -545,6 +563,19 @@ impl MLP {
                     let grad_output = softmax_probs;
                     self.backward(&grad_output, cache);
                     self.update_weights(learning_rate);
+
+                    //输出当前训练进度
+                    if batch_index % 100 == 0 {
+                        println!(
+                            "Epoch: {}/{}, Iter: {}/{}, Loss: {:.4}, Accuracy: {:.4}%",
+                            epoch,
+                            epochs,
+                            batch_index,
+                            num_batches,
+                            total_loss / (batch_index + 1) as f32,
+                            (100 * correct) as f32 / ((batch_index + 1) * BATCH_SIZE) as f32
+                        );
+                    }
                 } else {
                     println!("There is no  available data");
                 }
