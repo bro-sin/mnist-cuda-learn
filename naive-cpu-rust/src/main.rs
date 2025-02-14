@@ -5,9 +5,12 @@ use std::io::{self, Read};
 const PICTURE_WIDTH: usize = 28;
 const PICTURE_HEIGHT: usize = 28;
 const PICTURE_SIZE: usize = PICTURE_WIDTH * PICTURE_HEIGHT;
+const HIDDEN_SIZE: usize = 256;
 const LABEL_SIZE: usize = 1;
-const TRAIN_SIZE: usize = 6e4 as usize;
-const TEST_SIZE: usize = 1e4 as usize;
+const TRAIN_SIZE: usize = 1e4 as usize;
+const TEST_SIZE: usize = 1e3 as usize;
+const BATCH_SIZE: usize = 4; //每一次训练使用的样本数
+const LEARNING_RATE: f32 = 1e-3;
 
 struct DataSet {
     images_file_path: String,
@@ -81,6 +84,35 @@ impl DataSet {
         let mut rng = rand::rng();
         let index = rng.random_range(0..self.num_elements);
         self.show(index);
+    }
+
+    fn get_train_matrix(&self, index: usize) -> (Option<Matrix>, Option<Matrix>) {
+        //需要定义BATCH_SIZE:一个batch（一次更新参数）有多少张图片和label（多少个样本）用来训练
+        //这里index应当是batch_index,也就是在num_batches这么多个batch中的第几个
+        //这个函数就是取出第index个batch的图片和label，总共有BATCH_SIZE个样本
+
+        if let (Some(images_data), Some(labels_data)) = (&self.images_data, &self.labels_data) {
+            let train_labels = Matrix {
+                data: labels_data[BATCH_SIZE * index..BATCH_SIZE * (index + 1)]
+                    .iter()
+                    .map(|&label| label as f32)
+                    .collect(),
+                row_major: true,
+                rows_num: BATCH_SIZE,
+                cols_num: 1,
+            };
+            let train_images = Matrix {
+                data: images_data
+                    [BATCH_SIZE * PICTURE_SIZE * index..BATCH_SIZE * PICTURE_SIZE * (index + 1)]
+                    .to_vec(),
+                row_major: true,
+                rows_num: PICTURE_SIZE,
+                cols_num: BATCH_SIZE,
+            };
+            (Some(train_images), Some(train_labels))
+        } else {
+            (None, None)
+        }
     }
 }
 
@@ -175,6 +207,12 @@ impl Matrix {
         result_matrix
     }
 
+    fn multiply_scale(&mut self, other: f32) {
+        for i in 0..self.data.len() {
+            self.data[i] *= other;
+        }
+    }
+
     fn add(&mut self, other: &Self) {
         assert_eq!(
             self.rows_num, other.rows_num,
@@ -191,6 +229,41 @@ impl Matrix {
             self.data[i] += other.data[i];
         }
     }
+    fn add_bias(&mut self, other: &Self) {
+        //考虑到bias和前面输出的维度并不一致，前面输出会有一个BATCH_SIZE，而bias是[output_features,1]
+        //所以这里的add_bias是将bias的每一列加到self的每一列上
+        //要求行是一样的，列不作要求
+        assert_eq!(
+            self.rows_num, other.rows_num,
+            "Incompatible rows for addition: self.rows_num = {}, other.rows_num = {}",
+            self.rows_num, other.rows_num
+        );
+        let cols_num = self.cols_num;
+        for row in 0..other.rows_num {
+            let bias_value = other.get_item(row, 0);
+            for col in 0..cols_num {
+                let new_item = self.get_item(row, col) + bias_value;
+                self.set_item(row, col, new_item);
+            }
+        }
+    }
+
+    fn subtract(&mut self, other: &Self) {
+        assert_eq!(
+            self.rows_num, other.rows_num,
+            "Incompatible rows for subtraction: self.rows_num = {}, other.rows_num = {}",
+            self.rows_num, other.rows_num
+        );
+        assert_eq!(
+            self.cols_num, other.cols_num,
+            "Incompatible columns for subtraction: self.cols_num = {}, other.cols_num = {}",
+            self.cols_num, other.cols_num
+        );
+        let length = self.data.len();
+        for i in 0..length {
+            self.data[i] -= other.data[i];
+        }
+    }
 
     fn sum(&self, axis: Axis) -> Self {
         match axis {
@@ -202,7 +275,7 @@ impl Matrix {
                     for row in 0..self.rows_num {
                         tmp_sum += self.get_item(row, col);
                     }
-                    result_matrix.set_item(1, col, tmp_sum);
+                    result_matrix.set_item(0, col, tmp_sum);
                 }
                 result_matrix
             }
@@ -213,7 +286,7 @@ impl Matrix {
                     for col in 0..self.cols_num {
                         tmp_sum += self.get_item(row, col);
                     }
-                    result_matrix.set_item(row, 1, tmp_sum);
+                    result_matrix.set_item(row, 0, tmp_sum); //记住索引是0
                 }
                 result_matrix
             }
@@ -264,16 +337,25 @@ impl Linear {
     fn forward(&self, input: &Matrix) -> Matrix {
         //z=wx+b
         let mut output = self.weights.multiply(input);
-        output.add(&self.bias);
+        //output的维度是[output_features,BATCH_SIZE]
+        //bias的维度是[output_features,1]
+        output.add_bias(&self.bias);
         output
     }
 
     fn backward(&mut self, grad_output: &Matrix, input: &Matrix) {
-        //w[m,n]= y[m,batch_size]@x.T[batch_size,n]
+        //w[m,n]= y[m,BATCH_SIZE]@x.T[BATCH_SIZE,n]
         self.grad_weights = grad_output.multiply(&input.get_transpose_matrix());
         self.grad_bias = grad_output.sum(Axis::Column);
         // grad_x[n,1] = w.T[n,m] @ grad_out[m,1]
         self.grad_input = self.weights.get_transpose_matrix().multiply(grad_output);
+    }
+
+    fn update_weights(&mut self, learning_rate: f32) {
+        self.grad_weights.multiply_scale(-learning_rate);
+        self.weights.subtract(&self.grad_weights);
+        self.grad_bias.multiply_scale(-learning_rate);
+        self.bias.subtract(&self.grad_bias);
     }
 }
 
@@ -290,11 +372,12 @@ impl Linear {
 struct SoftMax {}
 impl SoftMax {
     fn forward(&self, input: &Matrix) -> Matrix {
-        //input[m,batch_size]
+        //input[m,BATCH_SIZE]
         //对其中的m个元素（一列）做softmax
         let batch_size = input.cols_num;
         let mut output = input.clone();
         for batch_index in 0..batch_size {
+            // 这里batch_index指的是在batch_size这么多个样本中的第几个
             //先找这一列最大的
             let mut max_element: f32 = input.get_item(0, batch_index);
             for row in 1..input.rows_num {
@@ -354,6 +437,11 @@ struct CrossEntropyLoss {
 }
 
 impl CrossEntropyLoss {
+    fn new() -> Self {
+        Self {
+            softmax: SoftMax {},
+        }
+    }
     fn forward(&self, input: &Matrix, target: &Matrix) -> f32 {
         //target[batchsize,1]，每一个图像真实的label
         let input_probs = self.softmax.forward(input);
@@ -374,6 +462,94 @@ impl CrossEntropyLoss {
             log_sum += f32::ln(max_prob);
         }
         log_sum / target.rows_num as f32
+    }
+}
+
+struct MLP {
+    input_features: usize,
+    hidden_features: usize,
+    num_classes: usize,
+    fc1: Linear,
+    relu: ReLU,
+    fc2: Linear,
+    softmax: SoftMax,
+}
+
+impl MLP {
+    fn new(input_features: usize, hidden_features: usize, num_classes: usize) -> Self {
+        Self {
+            input_features,
+            hidden_features,
+            num_classes,
+            fc1: Linear::new(input_features, hidden_features),
+            relu: ReLU {},
+            fc2: Linear::new(hidden_features, num_classes),
+            softmax: SoftMax {},
+        }
+    }
+
+    fn forward(&self, input: &Matrix) -> Vec<Matrix> {
+        //input: 28*28,BATCH_SIZE
+        let fc1_output = self.fc1.forward(input);
+        let relu_output = self.relu.forward(&fc1_output);
+        let fc2_output = self.fc2.forward(&relu_output);
+        vec![fc2_output, input.clone(), fc1_output, relu_output]
+    }
+
+    fn backward(&mut self, grad_output: &Matrix, cache: Vec<Matrix>) {
+        let (fc1_input, fc1_output, relu_output) = (&cache[1], &cache[2], &cache[3]);
+
+        self.fc2.backward(grad_output, relu_output);
+        let grad_fc2 = &self.fc2.grad_input;
+
+        let grad_relu = self.relu.backward(grad_fc2, fc1_output);
+
+        self.fc1.backward(&grad_relu, fc1_input);
+    }
+
+    fn update_weights(&mut self, learning_rate: f32) {
+        self.fc1.update_weights(learning_rate);
+        self.fc2.update_weights(learning_rate);
+    }
+}
+
+impl MLP {
+    fn train(&mut self, train_data: &DataSet, learning_rate: f32, epochs: usize) {
+        let num_batches = train_data.num_elements / BATCH_SIZE;
+        for epoch in 0..epochs {
+            //训练的轮数
+            let total_loss = 0f32;
+            for batch_index in 0..num_batches {
+                println!(
+                    "Epoch: {}/{}, batch: {}/{}",
+                    epoch, epochs, batch_index, num_batches
+                );
+                //这里batch_index指的是在num_batches这么多个batch中的第几个
+                //将数据分成多个batch，每一次由BATCH_SIZE个样本进行前向传播和反向传播，然后更新参数
+                if let (Some(train_images), Some(train_labels)) =
+                    train_data.get_train_matrix(batch_index)
+                {
+                    let cache = self.forward(&train_images);
+                    //根据crossentropyloss的反向传播，计算出grad_output
+                    let y_pred = &cache[0]; //这是没有经过softmax的输出
+                    let mut softmax_probs = self.softmax.forward(y_pred);
+                    let mut y_true_one_hot = Matrix::zeros_like(&softmax_probs);
+                    for i in 0..BATCH_SIZE {
+                        let label = train_labels.get_item(i, 0) as usize;
+                        //label就是第i个样本的真实label
+                        y_true_one_hot.set_item(label, i, 1f32);
+                        //这里将y_true_one_hot的第i个样本的概率设置为1,也就是我们softmax_probs理想的输出
+                    }
+                    softmax_probs.subtract(&y_true_one_hot);
+                    //softmax_probs-y_true_one_hot就是crossentropy对fc2的输出的梯度
+                    let grad_output = softmax_probs;
+                    self.backward(&grad_output, cache);
+                    self.update_weights(learning_rate);
+                } else {
+                    println!("There is no  available data");
+                }
+            }
+        }
     }
 }
 
@@ -437,9 +613,25 @@ fn test_linear() {
     output.show();
 }
 
+fn test_MLP() -> io::Result<()> {
+    let mut mlp = MLP::new(PICTURE_SIZE, HIDDEN_SIZE, 10);
+    let mut train_dataset: DataSet = DataSet {
+        images_file_path: "../mnist_data/X_train.bin".to_string(),
+        labels_file_path: "../mnist_data/y_train.bin".to_string(),
+        num_elements: TRAIN_SIZE,
+        images_data: None,
+        labels_data: None,
+    };
+    train_dataset.load_data()?;
+    mlp.train(&train_dataset, LEARNING_RATE, 5);
+
+    Ok(())
+}
+
 fn main() -> io::Result<()> {
     // test_dataset_load()?;
     // test_matrix_show();
-    test_linear();
+    // test_linear();
+    test_MLP();
     Ok(())
 }
