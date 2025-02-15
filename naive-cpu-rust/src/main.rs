@@ -492,7 +492,7 @@ struct MLP {
 
 impl MLP {
     fn new(input_features: usize, hidden_features: usize, num_classes: usize) -> Self {
-        Self {
+        let mut this_mlp = Self {
             input_features,
             hidden_features,
             num_classes,
@@ -501,7 +501,10 @@ impl MLP {
             fc2: Linear::new(hidden_features, num_classes),
             softmax: SoftMax {},
             cross_entropy_loss: CrossEntropyLoss::new(),
-        }
+        };
+        this_mlp.fc1.init_paramers();
+        this_mlp.fc2.init_paramers();
+        this_mlp
     }
 
     fn forward(&self, input: &Matrix) -> Vec<Matrix> {
@@ -576,20 +579,30 @@ impl MLP {
                     //softmax_probs-y_true_one_hot就是crossentropy对fc2的输出的梯度
                     let grad_output = softmax_probs;
                     self.backward(&grad_output, cache);
+                    let mut _tmp_grad_bias = self.fc1.grad_bias.get_item(200, 0);
+                    let _tmp_grad_weight = self.fc1.grad_weights.get_item(200, 700);
+                    println!(
+                        "grad_tmp_bias:{}, grad_tmp_weight:{}",
+                        _tmp_grad_bias, _tmp_grad_weight
+                    );
+
                     self.update_weights(learning_rate);
+                    let _tmp_bias = self.fc1.bias.get_item(200, 0);
+                    let _tmp_weight = self.fc1.weights.get_item(200, 700);
+                    println!("tmp_bias:{}, tmp_weight:{}", _tmp_bias, _tmp_weight);
 
                     //输出当前训练进度
-                    if batch_index % 100 == 0 {
-                        println!(
-                            "Epoch: {}/{}, Iter: {}/{}, Loss: {:.4}, Accuracy: {:.4}%",
-                            epoch,
-                            epochs,
-                            batch_index,
-                            num_batches,
-                            total_loss / (batch_index + 1) as f32,
-                            (100 * correct) as f32 / ((batch_index + 1) * BATCH_SIZE) as f32
-                        );
-                    }
+                    // if batch_index % 100 == 0 {
+                    println!(
+                        "Epoch: {}/{}, Iter: {}/{}, Loss: {:.4}, Accuracy: {:.4}%",
+                        epoch,
+                        epochs,
+                        batch_index,
+                        num_batches,
+                        total_loss / (batch_index + 1) as f32,
+                        (100 * correct) as f32 / ((batch_index + 1) * BATCH_SIZE) as f32
+                    );
+                    // }
                 } else {
                     println!("There is no  available data");
                 }
