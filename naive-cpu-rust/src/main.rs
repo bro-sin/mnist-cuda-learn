@@ -333,7 +333,7 @@ impl Linear {
     fn initialize_weights(&mut self) {
         let mut rng = rand::rng();
         let weights_size = self.weights.data.len();
-        let scale = f32::sqrt(2.0 / weights_size as f32);
+        let scale = f32::sqrt(2.0 / self.input_features as f32);
         for i in 0..weights_size {
             self.weights.data[i] = rng.random::<f32>() * scale; //f32的random方法返回的就是0-1的数，应该是标准正态分布
         }
@@ -438,14 +438,16 @@ impl ReLU {
     }
     fn backward(&self, grad_output: &Matrix, input: &Matrix) -> Matrix {
         assert_eq!(
-            grad_output.data.len(),
-            input.data.len(),
-            "Incompatitable grad_output and input"
+            (grad_output.rows_num, grad_output.cols_num),
+            (input.rows_num, input.cols_num),
+            "Shape mismatch"
         );
         let mut new_grad = grad_output.clone();
-        for index in 0..new_grad.data.len() {
-            if input.data[index] <= 0f32 {
-                new_grad.data[index] = 0f32;
+        for row in 0..new_grad.rows_num {
+            for col in 0..new_grad.cols_num {
+                if input.get_item(row, col) <= 0f32 {
+                    new_grad.set_item(row, col, 0f32);
+                }
             }
         }
         new_grad
@@ -632,16 +634,23 @@ fn test_dataset_load() -> io::Result<()> {
         labels_data: None,
     };
     train_dataset.load_data()?;
-    train_dataset.show_random();
-    let mut test_dataset: DataSet = DataSet {
-        images_file_path: "../mnist_data/X_test.bin".to_string(),
-        labels_file_path: "../mnist_data/y_test.bin".to_string(),
-        num_elements: TEST_SIZE,
-        images_data: None,
-        labels_data: None,
-    };
-    test_dataset.load_data()?;
-    test_dataset.show_random();
+    // train_dataset.show_random();
+    // let mut test_dataset: DataSet = DataSet {
+    //     images_file_path: "../mnist_data/X_test.bin".to_string(),
+    //     labels_file_path: "../mnist_data/y_test.bin".to_string(),
+    //     num_elements: TEST_SIZE,
+    //     images_data: None,
+    //     labels_data: None,
+    // };
+    // test_dataset.load_data()?;
+    // test_dataset.show_random();
+    train_dataset.show(0);
+    if let (Some(images0), Some(labels0)) = train_dataset.get_train_matrix(0) {
+        println!("images0:");
+        images0.show();
+        println!("labels0:");
+        labels0.show();
+    }
     Ok(())
 }
 
