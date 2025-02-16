@@ -1,3 +1,4 @@
+use rand::prelude::SliceRandom;
 use rand::Rng;
 use rand_distr::StandardNormal;
 use std::fs;
@@ -336,7 +337,7 @@ impl Linear {
         let weights_size = self.weights.data.len();
         let scale = f32::sqrt(2.0 / self.input_features as f32);
         for i in 0..weights_size {
-            self.weights.data[i] = rng.sample::<f32,_>(StandardNormal) * scale;
+            self.weights.data[i] = rng.sample::<f32, _>(StandardNormal) * scale;
         }
     }
     fn initialize_bias(&mut self) {
@@ -544,11 +545,17 @@ impl MLP {
 impl MLP {
     fn train(&mut self, train_data: &DataSet, learning_rate: f32, epochs: usize) {
         let num_batches = train_data.num_elements / BATCH_SIZE;
+        let mut rng = rand::rng();
         for epoch in 0..epochs {
             //训练的轮数
             let mut total_loss = 0f32;
             let mut correct: u32 = 0;
-            for batch_index in 0..num_batches {
+            // for batch_index in 0..num_batches {
+            let mut batch_indices: Vec<usize> = (0..num_batches).collect();
+            batch_indices.shuffle(&mut rng);
+            let mut _index: usize = 0; //记录顺序的轮次
+            for &batch_index in &batch_indices {
+                _index += 1;
                 //这里batch_index指的是在num_batches这么多个batch中的第几个
                 //将数据分成多个batch，每一次由BATCH_SIZE个样本进行前向传播和反向传播，然后更新参数
                 if let (Some(train_images), Some(train_labels)) =
@@ -591,15 +598,15 @@ impl MLP {
                     self.backward(&grad_output, cache);
                     self.update_weights(learning_rate);
                     //输出当前训练进度
-                    if batch_index % 100 == 0 {
+                    if (_index - 1) % 100 == 0 {
                         println!(
                             "Epoch: {}/{}, Iter: {}/{}, Loss: {:.4}, Accuracy: {:.4}%",
-                            epoch,
+                            epoch + 1,
                             epochs,
-                            batch_index,
+                            _index,
                             num_batches,
-                            total_loss / (batch_index + 1) as f32,
-                            (100 * correct) as f32 / ((batch_index + 1) * BATCH_SIZE) as f32
+                            total_loss / (_index) as f32,
+                            (100 * correct) as f32 / ((_index) * BATCH_SIZE) as f32
                         );
                     }
                 } else {
