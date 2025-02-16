@@ -357,10 +357,16 @@ impl Linear {
 
     fn backward(&mut self, grad_output: &Matrix, input: &Matrix) {
         //w[m,n]= y[m,BATCH_SIZE]@x.T[BATCH_SIZE,n]
+        // println!("grad_output in linear backward:");
+        // grad_output.show();
+        // println!("Before backward, grad_weights:");
+        // self.grad_weights.show();
         self.grad_weights = grad_output.multiply(&input.get_transpose_matrix());
         self.grad_bias = grad_output.sum(Axis::Column);
         // grad_x[n,1] = w.T[n,m] @ grad_out[m,1]
         self.grad_input = self.weights.get_transpose_matrix().multiply(grad_output);
+        // println!("After backward, grad_weights:");
+        // self.grad_weights.show();
     }
 
     fn update_weights(&mut self, learning_rate: f32) {
@@ -575,9 +581,15 @@ impl MLP {
                         y_true_one_hot.set_item(label, i, 1f32);
                         //这里将y_true_one_hot的第i个样本的概率设置为1,也就是我们softmax_probs理想的输出
                     }
+                    println!("train_labels:");
+                    train_labels.show();
+                    println!("y_true_one_hot:");
+                    y_true_one_hot.show();
                     softmax_probs.subtract(&y_true_one_hot);
                     //softmax_probs-y_true_one_hot就是crossentropy对fc2的输出的梯度
                     let grad_output = softmax_probs;
+                    println!("grad_output:");
+                    grad_output.show();
                     self.backward(&grad_output, cache);
                     let mut _tmp_grad_bias = self.fc1.grad_bias.get_item(200, 0);
                     let _tmp_grad_weight = self.fc1.grad_weights.get_item(200, 700);
