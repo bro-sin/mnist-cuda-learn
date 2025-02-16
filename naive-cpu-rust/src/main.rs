@@ -1,4 +1,5 @@
 use rand::Rng;
+use rand_distr::StandardNormal;
 use std::fs;
 use std::io::{self, Read};
 
@@ -335,7 +336,7 @@ impl Linear {
         let weights_size = self.weights.data.len();
         let scale = f32::sqrt(2.0 / self.input_features as f32);
         for i in 0..weights_size {
-            self.weights.data[i] = rng.random::<f32>() * scale; //f32的random方法返回的就是0-1的数，应该是标准正态分布
+            self.weights.data[i] = rng.sample::<f32,_>(StandardNormal) * scale;
         }
     }
     fn initialize_bias(&mut self) {
@@ -583,40 +584,24 @@ impl MLP {
                         y_true_one_hot.set_item(label, i, 1f32);
                         //这里将y_true_one_hot的第i个样本的概率设置为1,也就是我们softmax_probs理想的输出
                     }
-                    println!("train_labels:");
-                    train_labels.show();
-                    println!("y_true_one_hot:");
-                    y_true_one_hot.show();
+
                     softmax_probs.subtract(&y_true_one_hot);
                     //softmax_probs-y_true_one_hot就是crossentropy对fc2的输出的梯度
                     let grad_output = softmax_probs;
-                    println!("grad_output:");
-                    grad_output.show();
                     self.backward(&grad_output, cache);
-                    let mut _tmp_grad_bias = self.fc1.grad_bias.get_item(200, 0);
-                    let _tmp_grad_weight = self.fc1.grad_weights.get_item(200, 700);
-                    println!(
-                        "grad_tmp_bias:{}, grad_tmp_weight:{}",
-                        _tmp_grad_bias, _tmp_grad_weight
-                    );
-
                     self.update_weights(learning_rate);
-                    let _tmp_bias = self.fc1.bias.get_item(200, 0);
-                    let _tmp_weight = self.fc1.weights.get_item(200, 700);
-                    println!("tmp_bias:{}, tmp_weight:{}", _tmp_bias, _tmp_weight);
-
                     //输出当前训练进度
-                    // if batch_index % 100 == 0 {
-                    println!(
-                        "Epoch: {}/{}, Iter: {}/{}, Loss: {:.4}, Accuracy: {:.4}%",
-                        epoch,
-                        epochs,
-                        batch_index,
-                        num_batches,
-                        total_loss / (batch_index + 1) as f32,
-                        (100 * correct) as f32 / ((batch_index + 1) * BATCH_SIZE) as f32
-                    );
-                    // }
+                    if batch_index % 100 == 0 {
+                        println!(
+                            "Epoch: {}/{}, Iter: {}/{}, Loss: {:.4}, Accuracy: {:.4}%",
+                            epoch,
+                            epochs,
+                            batch_index,
+                            num_batches,
+                            total_loss / (batch_index + 1) as f32,
+                            (100 * correct) as f32 / ((batch_index + 1) * BATCH_SIZE) as f32
+                        );
+                    }
                 } else {
                     println!("There is no  available data");
                 }
@@ -690,6 +675,8 @@ fn test_linear() {
     input.show();
     let output = linear.forward(&input);
     output.show();
+
+    linear.weights.show();
 }
 
 fn test_MLP() -> io::Result<()> {
