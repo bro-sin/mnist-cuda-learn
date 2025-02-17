@@ -870,6 +870,9 @@ fn test_matrix_using_fc1_weights_and_image_0() -> io::Result<()> {
     };
     train_dataset.load_data()?;
     train_dataset.show(0);
+    train_dataset.show(1);
+    train_dataset.show(2);
+    train_dataset.show(3);
 
     if let (Some(train_images), _) = train_dataset.get_train_matrix(0) {
         // //展示训练数据某行
