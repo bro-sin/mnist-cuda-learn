@@ -17,7 +17,7 @@ from rich.jupyter import print
 # In[ ]:
 
 
-batch_size=4
+batch_size = 4
 
 
 # In[ ]:
@@ -54,11 +54,21 @@ test_loader = DataLoader(
 
 class Linear:
     def __init__(
-        self, input_features: int, output_features: int, with_bias: bool = True
+        self,
+        input_features: int,
+        output_features: int,
+        with_bias: bool = True,
+        load_from_file: bool = False,
+        weights_path: str = None,
     ):
-        self.weights = Linear.initialize_weights(
-            input_size=input_features, output_size=output_features
+        self.weights: np.ndarray = Linear.initialize_weights(
+            input_size=input_features,
+            output_size=output_features,
+            load_from_file=load_from_file,
+            path=weights_path,
         )
+        if not load_from_file:
+            self.save_weights(weights_path)
         self.grad_weights = np.empty_like(self.weights)
         self.grad_input = np.empty((batch_size, input_features))
         if with_bias:
@@ -74,11 +84,23 @@ class Linear:
         assert x.shape[1] == self.weights.shape[0]
         return np.dot(x, self.weights) + self.bias
 
-    def initialize_weights(input_size, output_size):
+    def initialize_weights(
+        input_size, output_size, load_from_file: bool = False, path: str = None
+    ):
+        if load_from_file:
+            # 有就加载，没有就初始化
+            weights = Linear.load_weights(path)
+            return weights.reshape(input_size, output_size)
         return np.random.randn(input_size, output_size) * np.sqrt(2 / input_size)
 
+    def save_weights(self, path: str):
+        self.weights.astype(np.float32).tofile(path)
+
+    def load_weights(path: str):
+        return np.fromfile(path, dtype=np.float32)
+
     def initialize_bias(output_size):
-        return np.zeros((1, output_size))
+        return np.zeros((1, output_size), dtype=np.float32)
 
     def __call__(self, x: np.ndarray):
         return self.forward(x)
@@ -195,11 +217,17 @@ class Optimizer:
 class MLP:
     def __init__(self, input_features: int, hidden_features: int, num_classes: int):
         self.fc1: Linear = Linear(
-            input_features=input_features, output_features=hidden_features
+            input_features=input_features,
+            output_features=hidden_features,
+            load_from_file=True,
+            weights_path="numpy_init_weights/fc1.bin",
         )
         self.relu: ReLU = ReLU()
         self.fc2: Linear = Linear(
-            input_features=hidden_features, output_features=num_classes
+            input_features=hidden_features,
+            output_features=num_classes,
+            load_from_file=True,
+            weights_path="numpy_init_weights/fc2.bin",
         )
         self.softmax: Softmax = Softmax()
 
