@@ -220,14 +220,14 @@ class MLP:
             input_features=input_features,
             output_features=hidden_features,
             load_from_file=True,
-            weights_path="numpy_init_weights/fc1.bin",
+            weights_path="python/numpy_init_weights/fc1.bin",
         )
         self.relu: ReLU = ReLU()
         self.fc2: Linear = Linear(
             input_features=hidden_features,
             output_features=num_classes,
             load_from_file=True,
-            weights_path="numpy_init_weights/fc2.bin",
+            weights_path="python/numpy_init_weights/fc2.bin",
         )
         self.softmax: Softmax = Softmax()
 
