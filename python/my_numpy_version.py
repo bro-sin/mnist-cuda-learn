@@ -1,34 +1,34 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# In[1]:
+# In[ ]:
 
 
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
-from torchvision import datasets,transforms
+from torchvision import datasets, transforms
 from dataclasses import dataclass
 
 from rich.progress import Progress
 from rich.jupyter import print
 
 
-# In[2]:
+# In[ ]:
 
 
 batch_size=4
 
 
-# In[3]:
+# In[ ]:
 
 
 data_dir = "data"
 
 mnist_data_transform = transforms.Compose(
     [
-        transforms.ToTensor(),
-        transforms.Normalize((0.1307,), (0.3081)),
+        transforms.ToTensor(),  # 这里已经转成了0-1之间的数
+        # transforms.Normalize((0.1307,), (0.3081)),
     ]
 )
 
@@ -40,14 +40,16 @@ test_dataset = datasets.MNIST(
 )
 
 
-# In[4]:
+# In[ ]:
 
 
-train_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=True)
-test_loader = DataLoader(dataset=test_dataset, batch_size=len(test_dataset), shuffle=True)
+train_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=False)
+test_loader = DataLoader(
+    dataset=test_dataset, batch_size=len(test_dataset), shuffle=False
+)
 
 
-# In[5]:
+# In[ ]:
 
 
 class Linear:
@@ -58,7 +60,7 @@ class Linear:
             input_size=input_features, output_size=output_features
         )
         self.grad_weights = np.empty_like(self.weights)
-        self.grad_input = np.empty((batch_size,input_features))
+        self.grad_input = np.empty((batch_size, input_features))
         if with_bias:
             self.bias = Linear.initialize_bias(output_size=output_features)
             self.grad_bias = np.empty_like(self.bias)
@@ -97,7 +99,7 @@ class Linear:
         return grad_input, grad_weights, grad_bias
 
 
-# In[6]:
+# In[ ]:
 
 
 class ReLU:
@@ -114,7 +116,7 @@ class ReLU:
         return self.forward(x)
 
 
-# In[7]:
+# In[ ]:
 
 
 class Softmax:
@@ -132,7 +134,7 @@ class Softmax:
         raise NotImplementedError
 
 
-# In[8]:
+# In[ ]:
 
 
 class CrossEntropyLoss:
@@ -160,12 +162,12 @@ class CrossEntropyLoss:
 
         # 返回交叉熵损失
         return -np.mean(np.log(correct_class_probs))
+
     def __call__(self, input: np.ndarray, target: np.ndarray):
-        return self.forward(input=input,target=target)
+        return self.forward(input=input, target=target)
 
 
-
-# In[9]:
+# In[ ]:
 
 
 @dataclass
@@ -187,7 +189,7 @@ class Optimizer:
         self.linear_grid_bias2[:] -= self.learning_rate * self.linear_grid_bias2
 
 
-# In[10]:
+# In[ ]:
 
 
 class MLP:
@@ -211,15 +213,12 @@ class MLP:
         fc2_output = self.fc2(relu_output)
         return fc2_output, (fc1_input, fc1_output, relu_output)
 
-    def eval(self,x:np.ndarray):
+    def eval(self, x: np.ndarray):
         fc1_input = x.reshape(-1, 28 * 28)
         fc1_output = self.fc1(fc1_input)
         relu_output = self.relu(fc1_output)
         fc2_output = self.fc2(relu_output)
         return fc2_output
-
-
-
 
     def backward(self, grad_output, cache):
         fc1_input, fc1_output, relu_output = cache
@@ -241,10 +240,16 @@ class MLP:
         return grad_weights1, grad_bias1, grad_weights2, grad_bias2
 
 
-# In[11]:
+# In[ ]:
 
 
-def train(model: MLP, train_loader: DataLoader, test_loader:DataLoader, learning_rate: float, epochs: int):
+def train(
+    model: MLP,
+    train_loader: DataLoader,
+    test_loader: DataLoader,
+    learning_rate: float,
+    epochs: int,
+):
     optimizer = Optimizer(
         learning_rate=learning_rate,
         linear_weight1=model.fc1.weights,
@@ -258,19 +263,35 @@ def train(model: MLP, train_loader: DataLoader, test_loader:DataLoader, learning
     )
     criterion = CrossEntropyLoss()
 
-    test_images,test_labels=next(iter(test_loader))
-    print(f"test_images.shape: {test_images.shape}, test_labels.shape: {test_labels.shape}")
+    test_images, test_labels = next(iter(test_loader))
+    print(
+        f"test_images.shape: {test_images.shape}, test_labels.shape: {test_labels.shape}"
+    )
 
     for epoch in range(epochs):
         # print(f"Epoch {epoch+1}/{epochs}")
         with Progress() as progress:
-            training_task=progress.add_task(f"Training epoch {epoch+1}/{epochs}",total=len(train_dataset)/batch_size)
+            training_task = progress.add_task(
+                f"Training epoch {epoch+1}/{epochs}",
+                total=len(train_dataset) / batch_size,
+            )
+            correct = 0
+            total_loss = 0
             for i, (images, labels) in enumerate(train_loader):
                 y_pred, cache = model(x=images)
-                #计算loss
-                ce_loss=criterion(input=y_pred,target=labels)
+                # 计算loss
+                ce_loss = criterion(input=y_pred, target=labels)
+                total_loss += ce_loss
                 # print(f"loss = {ce_loss}")
-                progress.update(training_task,advance=1,description=f"Training epoch {epoch+1}/{epochs}, "+ f"loss = {ce_loss}")
+                # 计算准确的个数
+                correct += np.sum(np.argmax(y_pred, axis=1) == labels.numpy())
+                progress.update(
+                    training_task,
+                    advance=1,
+                    description=f"Training epoch {epoch+1}/{epochs}, "
+                    + f"loss = {total_loss/(i+1)/batch_size} "
+                    + f"accuracy = {correct/(i+1)/batch_size}",
+                )
                 softmax_probs = model.softmax(input=y_pred)
                 y_true_one_hot = np.zeros_like(y_pred)
                 y_true_one_hot[range(batch_size), labels] = 1
@@ -279,14 +300,14 @@ def train(model: MLP, train_loader: DataLoader, test_loader:DataLoader, learning
                 model.backward(grad_output=grad_output, cache=cache)
                 optimizer.update_weights()
             test_pred = model.eval(x=test_images)
-            test_loss=criterion(test_pred,test_labels)
-            accuracy=np.mean(np.argmax(test_pred,axis=1)==test_labels.numpy())
-            print(f"Epoch {epoch+1} - Test Loss: {test_loss}, Test Accuracy: {accuracy}")
-            
-            
+            test_loss = criterion(test_pred, test_labels)
+            accuracy = np.mean(np.argmax(test_pred, axis=1) == test_labels.numpy())
+            print(
+                f"Epoch {epoch+1} - Test Loss: {test_loss}, Test Accuracy: {accuracy}"
+            )
 
 
-# In[12]:
+# In[ ]:
 
 
 input_size = 28 * 28
@@ -295,7 +316,13 @@ output_size = 10
 model = MLP(
     input_features=input_size, hidden_features=hidden_size, num_classes=output_size
 )
-epochs=3
-learning_rate=1e-3
-train(model=model,train_loader=train_loader,test_loader=test_loader,learning_rate=learning_rate,epochs=epochs)
+epochs = 3
+learning_rate = 1e-3
+train(
+    model=model,
+    train_loader=train_loader,
+    test_loader=test_loader,
+    learning_rate=learning_rate,
+    epochs=epochs,
+)
 
