@@ -317,8 +317,9 @@ def train(
                     training_task,
                     advance=1,
                     description=f"Training epoch {epoch+1}/{epochs}, "
-                    + f"loss = {total_loss/(i+1)/batch_size} "
-                    + f"accuracy = {correct/(i+1)/batch_size}",
+                    + f"Iter {i+1}/{len(train_dataset) // batch_size}, "
+                    + f"loss = {(total_loss/(i+1)/batch_size):.4f} "
+                    + f"accuracy = {(100*correct/(i+1)/batch_size):.4f}%",
                 )
                 softmax_probs = model.softmax(input=y_pred)
                 y_true_one_hot = np.zeros_like(y_pred)
