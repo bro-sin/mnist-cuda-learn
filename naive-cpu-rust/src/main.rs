@@ -9,8 +9,8 @@ const PICTURE_HEIGHT: usize = 28;
 const PICTURE_SIZE: usize = PICTURE_WIDTH * PICTURE_HEIGHT;
 const HIDDEN_SIZE: usize = 256;
 const LABEL_SIZE: usize = 1;
-const TRAIN_SIZE: usize = 1e4 as usize;
-const TEST_SIZE: usize = 1e3 as usize;
+const TRAIN_SIZE: usize = 6e4 as usize;
+const TEST_SIZE: usize = 1e4 as usize;
 const BATCH_SIZE: usize = 4; //每一次训练使用的样本数
 const LEARNING_RATE: f32 = 1e-3;
 
@@ -347,6 +347,20 @@ impl Linear {
         self.initialize_weights();
         self.initialize_bias();
     }
+    fn load_weights(&mut self, path: &str) -> io::Result<()> {
+        //从文件中读取权重
+        let mut numpy_init_weights_file = fs::File::open(path)?;
+        let mut buffer = vec![0u8; (self.weights.data.len()) * std::mem::size_of::<f32>()];
+        numpy_init_weights_file.read_exact(&mut buffer)?;
+        let data: Vec<f32> = buffer
+            .chunks(4)
+            .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+            .collect();
+        self.weights.data = data;
+        self.weights.row_major = false;
+        // self.weights.show();
+        Ok(())
+    }
 
     fn forward(&self, input: &Matrix) -> Matrix {
         //z=wx+b
@@ -512,8 +526,24 @@ impl MLP {
             softmax: SoftMax {},
             cross_entropy_loss: CrossEntropyLoss::new(),
         };
-        this_mlp.fc1.init_paramers();
-        this_mlp.fc2.init_paramers();
+        // this_mlp.fc1.init_paramers();
+        // this_mlp.fc2.init_paramers();
+        if let Ok(_) = this_mlp
+            .fc1
+            .load_weights("../python/numpy_init_weights/fc1.bin")
+        {
+            println!("fc1 weights loaded successfully");
+        } else {
+            println!("fc1 weights loaded failed");
+        }
+        if let Ok(_) = this_mlp
+            .fc2
+            .load_weights("../python/numpy_init_weights/fc2.bin")
+        {
+            println!("fc2 weights loaded successfully");
+        } else {
+            println!("fc2 weights loaded failed");
+        }
         this_mlp
     }
 
@@ -696,7 +726,7 @@ fn test_MLP() -> io::Result<()> {
         labels_data: None,
     };
     train_dataset.load_data()?;
-    mlp.train(&train_dataset, LEARNING_RATE, 5);
+    mlp.train(&train_dataset, LEARNING_RATE, 3);
 
     Ok(())
 }
