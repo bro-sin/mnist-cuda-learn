@@ -107,7 +107,7 @@ impl DataSet {
                 data: images_data
                     [BATCH_SIZE * PICTURE_SIZE * index..BATCH_SIZE * PICTURE_SIZE * (index + 1)]
                     .to_vec(),
-                row_major: true,
+                row_major: false,
                 rows_num: PICTURE_SIZE,
                 cols_num: BATCH_SIZE,
             };
@@ -711,12 +711,12 @@ impl MLP {
                 if let (Some(train_images), Some(train_labels)) =
                     train_data.get_train_matrix(batch_index)
                 {
-                    println!("Now weights:");
-                    self.fc1.weights.show();
-                    self.fc2.weights.show();
+                    // println!("Now weights:");
+                    // self.fc1.weights.show();
+                    // self.fc2.weights.show();
 
-                    println!("training images:");
-                    train_data.show(batch_index * BATCH_SIZE);
+                    // println!("training images:");
+                    // train_data.show(batch_index * BATCH_SIZE);
 
                     let cache = self.forward(&train_images);
                     //根据crossentropyloss的反向传播，计算出grad_output
@@ -896,7 +896,7 @@ fn main() -> io::Result<()> {
     // test_dataset_load()?;
     // test_matrix_show();
     // test_linear();
-    // test_MLP();
-    test_matrix_using_fc1_weights_and_image_0();
+    test_MLP();
+    // test_matrix_using_fc1_weights_and_image_0();
     Ok(())
 }
