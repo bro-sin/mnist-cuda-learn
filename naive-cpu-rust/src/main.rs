@@ -178,6 +178,7 @@ impl Matrix {
         let _index = self.get_index(row, col);
         self.data[_index] = new_item;
     }
+
     fn show(&self) {
         println!(
             "The matrix with {} rows and {} columns is as follows:",
@@ -582,7 +583,7 @@ impl MLP {
             let mut correct: u32 = 0;
             // for batch_index in 0..num_batches {
             let mut batch_indices: Vec<usize> = (0..num_batches).collect();
-            batch_indices.shuffle(&mut rng);
+            // batch_indices.shuffle(&mut rng);
             let mut _index: usize = 0; //记录顺序的轮次
             for &batch_index in &batch_indices {
                 _index += 1;
@@ -591,6 +592,13 @@ impl MLP {
                 if let (Some(train_images), Some(train_labels)) =
                     train_data.get_train_matrix(batch_index)
                 {
+                    println!("Now weights:");
+                    self.fc1.weights.show();
+                    self.fc2.weights.show();
+
+                    println!("training images:");
+                    train_data.show(batch_index * BATCH_SIZE);
+
                     let cache = self.forward(&train_images);
                     //根据crossentropyloss的反向传播，计算出grad_output
                     let y_pred = &cache[0]; //这是没有经过softmax的输出
