@@ -309,6 +309,125 @@ impl Matrix {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_multiply_row_major() {
+        // 测试行优先矩阵乘法
+        let a = Matrix {
+            data: vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+            row_major: true,
+            rows_num: 2,
+            cols_num: 3,
+        };
+
+        let b = Matrix {
+            data: vec![7.0, 8.0, 9.0, 10.0, 11.0, 12.0],
+            row_major: true,
+            rows_num: 3,
+            cols_num: 2,
+        };
+
+        let expected = Matrix {
+            data: vec![58.0, 64.0, 139.0, 154.0],
+            row_major: true,
+            rows_num: 2,
+            cols_num: 2,
+        };
+
+        let result = a.multiply(&b);
+        assert_eq!(result.data, expected.data);
+        assert_eq!(result.rows_num, expected.rows_num);
+        assert_eq!(result.cols_num, expected.cols_num);
+    }
+
+    #[test]
+    fn test_multiply_col_major() {
+        // 测试列优先矩阵乘法
+        let a = Matrix {
+            data: vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0],
+            row_major: false,
+            rows_num: 2,
+            cols_num: 3,
+        };
+
+        let b = Matrix {
+            data: vec![7.0, 9.0, 11.0, 8.0, 10.0, 12.0],
+            row_major: false,
+            rows_num: 3,
+            cols_num: 2,
+        };
+
+        let expected = Matrix {
+            data: vec![58.0, 64.0, 139.0, 154.0],
+            row_major: true,
+            rows_num: 2,
+            cols_num: 2,
+        };
+
+        let result = a.multiply(&b);
+        assert_eq!(result.data, expected.data);
+        assert_eq!(result.rows_num, expected.rows_num);
+        assert_eq!(result.cols_num, expected.cols_num);
+    }
+
+    #[test]
+    fn test_multiply_mixed_major() {
+        // 测试行优先和列优先混合矩阵乘法
+        let a = Matrix {
+            data: vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+            row_major: true,
+            rows_num: 2,
+            cols_num: 3,
+        };
+
+        let b = Matrix {
+            data: vec![7.0, 9.0, 11.0, 8.0, 10.0, 12.0],
+            row_major: false,
+            rows_num: 3,
+            cols_num: 2,
+        };
+
+        let expected = Matrix {
+            data: vec![58.0, 64.0, 139.0, 154.0],
+            row_major: true,
+            rows_num: 2,
+            cols_num: 2,
+        };
+
+        let result = a.multiply(&b);
+        assert_eq!(result.data, expected.data);
+        assert_eq!(result.rows_num, expected.rows_num);
+        assert_eq!(result.cols_num, expected.cols_num);
+    }
+
+    #[test]
+    fn test_multiply_incompatible_dimensions() {
+        // 测试不兼容维度的矩阵乘法
+        let a = Matrix {
+            data: vec![1.0, 2.0, 3.0, 4.0],
+            row_major: true,
+            rows_num: 2,
+            cols_num: 2,
+        };
+
+        let b = Matrix {
+            data: vec![5.0, 6.0, 7.0, 8.0, 9.0, 10.0],
+            row_major: true,
+            rows_num: 3,
+            cols_num: 2,
+        };
+
+        let result = std::panic::catch_unwind(|| {
+            a.multiply(&b);
+        });
+
+        assert!(result.is_err());
+    }
+}
+
 struct Linear {
     input_features: usize,
     output_features: usize,
@@ -739,10 +858,42 @@ fn test_MLP() -> io::Result<()> {
     Ok(())
 }
 
+fn test_matrix_using_fc1_weights_and_image_0() -> io::Result<()> {
+    let mut fc1 = Linear::new(PICTURE_SIZE, HIDDEN_SIZE);
+    fc1.load_weights("../python/numpy_init_weights/fc1.bin")?;
+    let mut train_dataset: DataSet = DataSet {
+        images_file_path: "../mnist_data/X_train.bin".to_string(),
+        labels_file_path: "../mnist_data/y_train.bin".to_string(),
+        num_elements: TRAIN_SIZE,
+        images_data: None,
+        labels_data: None,
+    };
+    train_dataset.load_data()?;
+    train_dataset.show(0);
+
+    if let (Some(train_images), _) = train_dataset.get_train_matrix(0) {
+        // //展示训练数据某行
+        // let row_num = 501;
+        // for i in 0..4 {
+        //     print!("{} ", train_images.get_item(row_num, i));
+        // }
+
+        //展示按行求和
+        let row_sum = train_images.sum(Axis::Row);
+        row_sum.show();
+        println!("");
+        let output = fc1.forward(&train_images);
+        // output.show();
+    }
+
+    Ok(())
+}
+
 fn main() -> io::Result<()> {
     // test_dataset_load()?;
     // test_matrix_show();
     // test_linear();
-    test_MLP();
+    // test_MLP();
+    test_matrix_using_fc1_weights_and_image_0();
     Ok(())
 }
