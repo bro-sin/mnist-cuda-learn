@@ -646,24 +646,24 @@ impl MLP {
             softmax: SoftMax {},
             cross_entropy_loss: CrossEntropyLoss::new(),
         };
-        // this_mlp.fc1.init_paramers();
-        // this_mlp.fc2.init_paramers();
-        if let Ok(_) = this_mlp
-            .fc1
-            .load_weights("../python/numpy_init_weights/fc1.bin")
-        {
-            println!("fc1 weights loaded successfully");
-        } else {
-            println!("fc1 weights loaded failed");
-        }
-        if let Ok(_) = this_mlp
-            .fc2
-            .load_weights("../python/numpy_init_weights/fc2.bin")
-        {
-            println!("fc2 weights loaded successfully");
-        } else {
-            println!("fc2 weights loaded failed");
-        }
+        this_mlp.fc1.init_paramers();
+        this_mlp.fc2.init_paramers();
+        // if let Ok(_) = this_mlp
+        //     .fc1
+        //     .load_weights("../python/numpy_init_weights/fc1.bin")
+        // {
+        //     println!("fc1 weights loaded successfully");
+        // } else {
+        //     println!("fc1 weights loaded failed");
+        // }
+        // if let Ok(_) = this_mlp
+        //     .fc2
+        //     .load_weights("../python/numpy_init_weights/fc2.bin")
+        // {
+        //     println!("fc2 weights loaded successfully");
+        // } else {
+        //     println!("fc2 weights loaded failed");
+        // }
         this_mlp
     }
 
@@ -702,7 +702,7 @@ impl MLP {
             let mut correct: u32 = 0;
             // for batch_index in 0..num_batches {
             let mut batch_indices: Vec<usize> = (0..num_batches).collect();
-            // batch_indices.shuffle(&mut rng);
+            batch_indices.shuffle(&mut rng);
             let mut _index: usize = 0; //记录顺序的轮次
             for &batch_index in &batch_indices {
                 _index += 1;
