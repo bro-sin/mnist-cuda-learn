@@ -78,6 +78,11 @@
         "valarray": "cpp",
         "variant": "cpp",
         "filesystem": "cpp",
-        "__locale": "cpp"
-    }
+        "__locale": "cpp",
+        "charconv": "cpp",
+        "span": "cpp",
+        "format": "cpp",
+        "text_encoding": "cpp"
+    },
+    "C_Cpp.default.cppStandard": "c++20"
 }
