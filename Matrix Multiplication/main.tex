@@ -1,0 +1,256 @@
+\documentclass{article}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{xcolor}
+
+\begin{document}
+\section{Kernel 5: Increasing Arithmetic Intensity via 2D Blocktiling}
+\subsection{Math Background}
+We have
+$
+    A \in \mathbb{R}^{M\times K},
+    B \in \mathbb{R}^{K\times N},
+$
+and
+$
+    C=AB
+$
+where
+$
+    C \in \mathbb{R}^{M\times N}
+$.
+
+To caculate $C$ using partitioned matrices,
+we can split $A$ into smaller matrices $A_{m_i}$,
+where $A_{m_i} \in \mathbb{R}^{BM\times K}$
+(assuming $M=I\times BM, I\in \mathbb{N}$)
+\begin{equation}
+    A=\begin{bmatrix}
+        A_{m_0} \\
+        A_{m_1} \\
+        \vdots  \\
+        A_{m_{I}}
+    \end{bmatrix}
+\end{equation}
+and $B$ into smaller matrices $B_{n_j}$,
+where $B_{n_j} \in \mathbb{R}^{K\times BN}$
+(assuming $N=J \times BN, J\in \mathbb{N}$)
+\begin{equation}
+    B=\begin{bmatrix}
+        B_{n_0} & B_{n_1} & \cdots & B_{n_{J}}
+    \end{bmatrix}
+\end{equation}
+where $BM$ and $BN$ are the block sizes.
+
+Then the product $C=AB$ can be written as
+\begin{equation}
+    C=
+    \begin{bmatrix}
+        A_{m_0} \\
+        A_{m_1} \\
+        \vdots  \\
+        A_{m_{I}}
+    \end{bmatrix}
+    \begin{bmatrix}
+        B_{n_0} & B_{n_1} & \cdots & B_{n_{J}}
+    \end{bmatrix}
+    =
+    \begin{bmatrix}
+        C_{m_0n_0}   & C_{m_0n_1}   & \cdots & C_{m_0n_{J}}   \\
+        C_{m_1n_0}   & C_{m_1n_1}   & \cdots & C_{m_1n_{J}}   \\
+        \vdots       & \vdots       & \ddots & \vdots         \\
+        C_{m_{I}n_0} & C_{m_{I}n_1} & \cdots & C_{m_{I}n_{J}}
+    \end{bmatrix}
+    \label{C=AB}
+\end{equation}
+where $C_{m_in_j} \in \mathbb{R}^{BM\times BN}$, and $C_{m_in_j}=A_{m_i}B_{n_j}$.
+
+To calculate $C_{m_in_j}$, we still use partitioned matrices.
+We split $A_{m_i}$ into smaller matrices $A_{m_ik_u}$,
+where $A_{m_in_u} \in \mathbb{R}^{BM\times BK}$
+(assuming $K=U\times BK, U\in \mathbb{N}$)
+\begin{equation}
+    A_{m_i}=
+    \begin{bmatrix}
+        A_{m_ik_0} & A_{m_ik_1} & \cdots & A_{m_ik_{U}}
+    \end{bmatrix}
+\end{equation}
+and $B_{n_j}$ into smaller matrices $B_{k_un_j}$,
+where $B_{k_un_j} \in \mathbb{R}^{BK\times BN}$
+(assuming $K=U\times BK, U\in \mathbb{N}$)
+\begin{equation}
+    B_{n_j}=
+    \begin{bmatrix}
+        B_{k_0n_j} \\
+        B_{k_1n_j} \\
+        \vdots     \\
+        B_{k_{U}n_j}
+    \end{bmatrix}
+\end{equation}
+where $BK$ is the block size.
+
+Then the product $C_{m_in_j}=A_{m_i}B_{n_j}$ can be written as
+\begin{equation}
+    \begin{aligned}
+        C_{m_in_j}= &
+        \begin{bmatrix}
+            A_{m_ik_0} & A_{m_ik_1} & \cdots & A_{m_ik_{U}}
+        \end{bmatrix}
+        \begin{bmatrix}
+            B_{k_0n_j} \\
+            B_{k_1n_j} \\
+            \vdots     \\
+            B_{k_{U}n_j}
+        \end{bmatrix}
+        \\
+        =           &
+        \sum_{u=0}^{U} A_{m_ik_u}B_{k_un_j}
+    \end{aligned}
+    \label{C_s=sum_As_Bs}
+\end{equation}
+Then let's focus on the calculation of
+$A_{m_ik_u}B_{k_un_j}$
+using inner loops.
+
+We can still use partitioned matrices to calculate
+$
+    A_{m_ik_u}B_{k_un_j}
+$.
+
+Let $As=A_{m_ik_u}, Bs=B_{k_un_j}$, and $Cs=AsBs$.
+split $As$ into smaller matrices $As_{m_t}$,
+where $As_{m_t} \in \mathbb{R}^{TM\times BK}$
+(assuming $BM=T\times TM, T\in \mathbb{N}$)
+\begin{equation}
+    As=
+    \begin{bmatrix}
+        As_{m_0} \\
+        As_{m_1} \\
+        \vdots   \\
+        As_{m_{T}}
+    \end{bmatrix}
+\end{equation}
+and $Bs$ into smaller matrices $Bs_{n_s}$,
+where $Bs_{n_s} \in \mathbb{R}^{BK\times TN}$
+(assuming $BN=S\times TN, S\in \mathbb{N}$)
+\begin{equation}
+    Bs=\begin{bmatrix}
+        Bs_{n_0} & Bs_{n_1} & \cdots & Bs_{n_{S}}
+    \end{bmatrix}
+\end{equation}
+
+The the part of the product $C_{m_in_j}=\sum_{u}AsBs$ can be written as
+\begin{equation}
+    \begin{aligned}
+        Cs=AsBs= &
+        \begin{bmatrix}
+            As_{m_0} \\
+            As_{m_1} \\
+            \vdots   \\
+            As_{m_{T}}
+        \end{bmatrix}
+        \begin{bmatrix}
+            Bs_{n_0} & Bs_{n_1} & \cdots & Bs_{n_{S}}
+        \end{bmatrix}
+        \\
+        =        &
+        \begin{bmatrix}
+            Cs_{m_0n_0}   & Cs_{m_0n_1}   & \cdots & Cs_{m_0n_{S}}   \\
+            Cs_{m_1n_0}   & Cs_{m_1n_1}   & \cdots & Cs_{m_1n_{S}}   \\
+            \vdots        & \vdots        & \ddots & \vdots          \\
+            Cs_{m_{T}n_0} & Cs_{m_{T}n_1} & \cdots & Cs_{m_{T}n_{S}}
+        \end{bmatrix}
+    \end{aligned}
+    \label{Cs=AsBs}
+\end{equation}
+where $Cs_{m_tn_s} \in \mathbb{R}^{TM\times TN}$, and $Cs_{m_tn_s}=As_{m_t}Bs_{n_s}$.
+
+\subsection{Assignment on CUDA}
+It is suitable to assign the calculation of
+$
+    C_{m_in_i}=A_{m_i}B_{n_j}
+$
+to a CUDA block.
+So according to equation \eqref{C=AB},
+we need \textcolor{red}{$I \times J$ blocks}.
+
+For each block, we need to calculate the smaller matrices
+$
+    C_{m_in_j}=\sum_{u=0}^{U} A_{m_ik_u}B_{k_un_j}
+$.
+And according to equation \eqref{Cs=AsBs},
+we can assign the calculation of
+$
+    Cs_{m_tn_s}=As_{m_t}Bs_{n_s}
+$
+to a CUDA thread.
+
+Notice that each thread is responsible for calculating
+$
+    TM\times TN
+$
+elements by accumulating the results of products mentioned on equation \eqref{Cs=AsBs}
+and also equation \eqref{C_s=sum_As_Bs}.
+
+For each block,
+\textcolor{red}{
+    $
+        T\times S
+    $
+    threads} are needed.
+
+For each block, shared memory of $As,Bs$ is needed.
+For each thread,
+$
+    \frac{BM\times BK}{T\times S}=\frac{BK}{BN}\times TM\times TN
+$
+elements of
+$
+    As
+$,
+and
+$
+    \frac{BK\times BN}{T\times S}=\frac{BK}{BM}\times TM\times TN
+$
+elements of
+$
+    Bs
+$
+are needed to load from global memory to shared memory.
+
+We have the thread index $idx\in [0, T\times S]$,
+let
+$
+    rowA=idx / BK, rowA \in [0, \frac{T\times S}{BK}),
+    colA=idx \% BK, colA \in [0, BK)
+$.
+In this case, every row should be repeated by
+$
+    \frac{BM}{\frac{T\times S}{BK}}=\frac{BK}{BN}\times TM\times TN
+$
+times.
+
+We can let each row responsible for
+$
+    \{
+    rowA+ \frac{i\times T\times S}{BK} | i \in[0, \frac{BK}{BN}\times TM\times TN)
+    \}
+$
+row.
+For the maxmimum value of $i$ and $rowA$, we can achieve
+\begin{align*}
+      & \frac{T\times S}{BK}+(\frac{BK}{BN}\times TM\times TN -1)\times \frac{T\times S}{BK}
+    \\
+    = & \frac{T\times S}{BK}+\frac{TM\times TN \times T\times S}{BN}-\frac{T\times S}{BK}
+    \\
+    = & \frac{TM\times TN \times T\times S}{BN}
+    \\
+    = & BM
+\end{align*}
+
+The same idea can be applied to $Bs$.
+
+\section{Kernel 6: Vectorize SMEM and GMEM Accesses}
+This kernel will vectorize all loads and stores from/to GMEM using vector datatypes.
+
+
+\end{document}
