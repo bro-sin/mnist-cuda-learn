@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <cassert>
 #include <iostream>
 #include <cuda_runtime.h>
 #include <string>
@@ -219,8 +220,8 @@ namespace Math
         Matrix<MatrixDataType> clone() const;
         Matrix<MatrixDataType> get_transpose_matrix() const;
 
-        Matrix<MatrixDataType> mutiply(const Matrix<MatrixDataType> &matrix) const;
-        void mutiply(const Matrix<MatrixDataType> &input, Matrix<MatrixDataType> &output);
+        Matrix<MatrixDataType> multiply(const Matrix<MatrixDataType> &matrix) const;
+        void multiply(const Matrix<MatrixDataType> &input, Matrix<MatrixDataType> &output);
     };
 }
 
@@ -367,12 +368,70 @@ namespace Math
     }
 
     template <Arithmetic MatrixDataType>
-    Matrix<MatrixDataType> Matrix<MatrixDataType>::mutiply(
+    Matrix<MatrixDataType> Matrix<MatrixDataType>::multiply(
         const Matrix<MatrixDataType> &matrix) const
     {
         Matrix<MatrixDataType> output = Matrix<MatrixDataType>::zeros(this->rows_num, matrix.cols_num);
-        this->mutiply(matrix, output);
+        this->multiply(matrix, output);
         return output;
+    }
+
+    template <Arithmetic MatrixDataType>
+    void Matrix<MatrixDataType>::multiply(
+        const Matrix<MatrixDataType> &input,
+        Matrix<MatrixDataType> &output)
+    {
+        // 要算的是output=this*input
+        assert(this->cols_num == input.rows_num);
+        assert(this->rows_num == output.rows_num);
+        assert(input.cols_num == output.cols_num);
+        // 暂时要求所有矩阵都是行优先的
+        // 如果有一个矩阵不是行优先的，直接抛出未定义异常
+        if (this->major_axis != Axis::Row || input.major_axis != Axis::Row || output.major_axis != Axis::Row)
+        {
+            throw std::runtime_error("The matrix is not row-major matrix");
+        }
+        // 要求MatrixDataType是float,否则抛出未定义异常
+        if (!std::is_same<MatrixDataType, float>::value)
+        {
+            throw std::runtime_error("The matrix data type is not float");
+        }
+
+        // 调用cuda的矩阵乘法
+        float *d_this, d_input, d_output;
+        cudaMalloc(&d_this, this->rows_num * this->cols_num * sizeof(float));
+        cudaMalloc(&d_input, input.rows_num * input.cols_num * sizeof(float));
+        cudaMalloc(&d_output, output.rows_num * output.cols_num * sizeof(float));
+        // 先将数据复制到CUDA上面
+        cudaMemcpy(d_this, this->data, sizeof(float) * this->rows_num * this->cols_num, cudaMemcpyHostToDevice);
+        cudaMemcpy(d_input, input.data, sizeof(float) * input.rows_num * input.cols_num, cudaMemcpyHostToDevice);
+
+        const uint BK = 8;
+        const uint TM = 8;
+        const uint TN = 8;
+        if (this->rows_num >= 128 and input.cols_num >= 128)
+        {
+            const uint BM = 128;
+            const uint BN = 128;
+            dim3 gridDim(CEIL_DIV(input.cols_num, BN), CEIL_DIV(this->rows_num, BM));
+            dim3 blockDim((BM * BN) / TM * TN);
+            CUDA_KERNELS::matmul<BM, BN, BK, TM, TN><<<gridDim, blockDim>>>(this->rows_num, input.cols_num, this->cols_num, 1.0, d_this, d_input, 0.0, d_output);
+        }
+        else
+        {
+            const uint BM = 64;
+            const uint BN = 64;
+            dim3 gridDim(CEIL_DIV(input.cols_num, BN), CEIL_DIV(this->rows_num, BM));
+            dim3 blockDim((BM * BN) / TM * TN);
+            CUDA_KERNELS::matmul<BM, BN, BK, TM, TN><<<gridDim, blockDim>>>(this->rows_num, input.cols_num, this->cols_num, 1.0, d_this, d_input, 0.0, d_output);
+        }
+
+        // 将结果复制回来
+        cudaMemcpy(output.data, d_output, sizeof(float) * output.rows_num * output.cols_num, cudaMemcpyDeviceToHost);
+        // 释放内存
+        cudaFree(d_this);
+        cudaFree(d_input);
+        cudaFree(d_output);
     }
 }
 
