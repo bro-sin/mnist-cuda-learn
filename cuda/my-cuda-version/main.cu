@@ -55,9 +55,9 @@ namespace CUDA_KERNELS
         // T和S也是小矩阵Cs分块后的行数和列数
         const dim3 Cs_dim = {CEIL_DIV(BN, TN), CEIL_DIV(BM, TM)}; // S列,T行
         // t是当前线程负责的Cs分块后的小矩阵的行下标
-        const uint Cs_row_t = threadIdx.x / small_C_dim.x; //(Idx)/S\in [0,T)
+        const uint Cs_row_t = threadIdx.x / Cs_dim.x; //(Idx)/S\in [0,T)
         // s是当前线程负责的Cs分块后的小矩阵的列下标
-        const uint Cs_col_s = threadIdx.x % small_C_dim.x; //(Idx)%S\in [0,S)
+        const uint Cs_col_s = threadIdx.x % Cs_dim.x; //(Idx)%S\in [0,S)
 
         // 当前线程负责计算的TM*TN个元素
         float Cs_m_t_n_s[TM * TN] = {0.0};
@@ -88,7 +88,7 @@ namespace CUDA_KERNELS
             for (uint loadOffset = 0; loadOffset < strideA; loadOffset++)
             {
                 // 获取As的第As_row行，第As_col列到第(As_col+3)列的数据
-                float4 tmp = reinterpret_cast<float4 *>(&A[(As_row + loadOffset) * K + As_col * VECTOR_SIZE])[0];
+                const float4 tmp = reinterpret_cast<const float4 *>(&A[(As_row + loadOffset) * K + As_col * VECTOR_SIZE])[0];
                 // 将数据转置后加载到共享内存中
                 As[(As_col * VECTOR_SIZE + 0) * BM + As_row + loadOffset] = tmp.x;
                 As[(As_col * VECTOR_SIZE + 1) * BM + As_row + loadOffset] = tmp.y;
@@ -99,7 +99,7 @@ namespace CUDA_KERNELS
             {
                 // 获取Bs的第Bs_row行，第Bs_col列到第(Bs_col+3)列的数据
                 reinterpret_cast<float4 *>(&Bs[(Bs_row + loadOffset) * BN + Bs_col * VECTOR_SIZE])[0] =
-                    reinterpret_cast<float4 *>(&B[(Bs_row + loadOffset) * N + Bs_col * VECTOR_SIZE])[0];
+                    reinterpret_cast<const float4 *>(&B[(Bs_row + loadOffset) * N + Bs_col * VECTOR_SIZE])[0];
             }
             __syncthreads();
             A += BK;     // A向右移动BK
@@ -181,7 +181,7 @@ namespace Math
     template <Arithmetic MatrixDataType = float>
     class Matrix
     {
-    private:
+    public:
         MatrixDataType *data;
         uint rows_num;
         uint cols_num;
@@ -221,7 +221,7 @@ namespace Math
         Matrix<MatrixDataType> get_transpose_matrix() const;
 
         Matrix<MatrixDataType> multiply(const Matrix<MatrixDataType> &matrix) const;
-        void multiply(const Matrix<MatrixDataType> &input, Matrix<MatrixDataType> &output);
+        void multiply(const Matrix<MatrixDataType> &input, Matrix<MatrixDataType> &output) const;
     };
 }
 
@@ -379,7 +379,7 @@ namespace Math
     template <Arithmetic MatrixDataType>
     void Matrix<MatrixDataType>::multiply(
         const Matrix<MatrixDataType> &input,
-        Matrix<MatrixDataType> &output)
+        Matrix<MatrixDataType> &output) const
     {
         // 要算的是output=this*input
         assert(this->cols_num == input.rows_num);
@@ -398,7 +398,7 @@ namespace Math
         }
 
         // 调用cuda的矩阵乘法
-        float *d_this, d_input, d_output;
+        float *d_this, *d_input, *d_output;
         cudaMalloc(&d_this, this->rows_num * this->cols_num * sizeof(float));
         cudaMalloc(&d_input, input.rows_num * input.cols_num * sizeof(float));
         cudaMalloc(&d_output, output.rows_num * output.cols_num * sizeof(float));
@@ -477,19 +477,19 @@ namespace DataSet
     }
 }
 
-int main()
-{
-    using namespace Math;
-    Matrix m = Matrix<long>::zeros(3, 4);
-    std::cout << sizeof(m.get_item(0, 0)) << std::endl;
-    m.show();
+// int main()
+// {
+//     using namespace Math;
+//     Matrix m = Matrix<long>::zeros(3, 4);
+//     std::cout << sizeof(m.get_item(0, 0)) << std::endl;
+//     m.show();
 
-    Matrix zeros_float = Matrix<>::zeros_like(m);
-    std::cout << sizeof(zeros_float.get_item(0, 0)) << std::endl;
-    zeros_float.show();
+//     Matrix zeros_float = Matrix<>::zeros_like(m);
+//     std::cout << sizeof(zeros_float.get_item(0, 0)) << std::endl;
+//     zeros_float.show();
 
-    Matrix zeros_bit = Matrix<bool>::zeros_like(m);
-    std::cout << sizeof(zeros_bit.get_item(0, 0)) << std::endl;
-    zeros_bit.show();
-    zeros_bit.get_transpose_matrix().show();
-}
+//     Matrix zeros_bit = Matrix<bool>::zeros_like(m);
+//     std::cout << sizeof(zeros_bit.get_item(0, 0)) << std::endl;
+//     zeros_bit.show();
+//     zeros_bit.get_transpose_matrix().show();
+// }
