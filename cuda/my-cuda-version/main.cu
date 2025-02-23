@@ -68,18 +68,18 @@ namespace CUDA_KERNELS
 
         // 移动指针到当前block需要计算的C_{m_in_j}的起始位置
         A += C_row_index_i * BM * K;                      // 向下移动i行，每一个小的分块矩阵的行数是BM，大矩阵每一行有K个元素
-        B += C_col_index_j * BK;                          // 向右移动j列，每一个小的分块矩阵的列数是BK
+        B += C_col_index_j * BN;                          // 向右移动j列，每一个小的分块矩阵的列数是BN
         C += C_row_index_i * BM * N + C_col_index_j * BN; // 向右移动j列，每一个小的分块矩阵的列数是BN，向下移动i行，每一个小的分块矩阵的行数是BM,大矩阵每一行有N个元素
 
         // 下面是给每个线程分配加载数据的任务
         const uint As_row = threadIdx.x / (BK / VECTOR_SIZE); // 最大为VECTOR_SIZE*T*S/(B*K)-1
         const uint As_col = threadIdx.x % (BK / VECTOR_SIZE); // 最大为B*K/VECTOR_SIZE-1
         // 需要重复加载的次数
-        const uint strideA = BM * BK / (Cs_dim.x * Cs_dim.y); // 数据总数处以线程总数
+        const uint strideA = BM * BK / VECTOR_SIZE / (Cs_dim.x * Cs_dim.y); // 数据总数（按照四个元素挨着的那种计算）处以线程总数
 
         const uint Bs_row = threadIdx.x / (BN / VECTOR_SIZE);
         const uint Bs_col = threadIdx.x % (BN / VECTOR_SIZE);
-        const uint strideB = BK * BN / (Cs_dim.x * Cs_dim.y);
+        const uint strideB = BK * BN / VECTOR_SIZE / (Cs_dim.x * Cs_dim.y);
 
         // 外层循环，循环U次，每次计算一个小矩阵C_{m_in_j}（对于整个block来说，对于这个线程来说是计算这个小矩阵中的一个小分块）
         for (uint u = 0; u < U; u++)
@@ -87,8 +87,9 @@ namespace CUDA_KERNELS
             // 将这个block计算需要的As和Bs加载到共享内存中
             for (uint loadOffset = 0; loadOffset < strideA; loadOffset++)
             {
+                uint aIndex = (As_row + loadOffset) * K + As_col * VECTOR_SIZE;
                 // 获取As的第As_row行，第As_col列到第(As_col+3)列的数据
-                const float4 tmp = reinterpret_cast<const float4 *>(&A[(As_row + loadOffset) * K + As_col * VECTOR_SIZE])[0];
+                const float4 tmp = reinterpret_cast<const float4 *>(&A[aIndex])[0];
                 // 将数据转置后加载到共享内存中
                 As[(As_col * VECTOR_SIZE + 0) * BM + As_row + loadOffset] = tmp.x;
                 As[(As_col * VECTOR_SIZE + 1) * BM + As_row + loadOffset] = tmp.y;
@@ -97,9 +98,10 @@ namespace CUDA_KERNELS
             }
             for (uint loadOffset = 0; loadOffset < strideB; loadOffset++)
             {
+                uint bIndex = (Bs_row + loadOffset) * N + Bs_col * VECTOR_SIZE;
                 // 获取Bs的第Bs_row行，第Bs_col列到第(Bs_col+3)列的数据
                 reinterpret_cast<float4 *>(&Bs[(Bs_row + loadOffset) * BN + Bs_col * VECTOR_SIZE])[0] =
-                    reinterpret_cast<const float4 *>(&B[(Bs_row + loadOffset) * N + Bs_col * VECTOR_SIZE])[0];
+                    reinterpret_cast<const float4 *>(&B[bIndex])[0];
             }
             __syncthreads();
             A += BK;     // A向右移动BK
