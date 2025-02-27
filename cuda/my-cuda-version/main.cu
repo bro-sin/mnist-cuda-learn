@@ -27,7 +27,6 @@ namespace HYPERPARAMETERS
 namespace CUDA_KERNELS
 {
 #define CEIL_DIV(x, y) (((x) + (y) - 1) / (y))
-#define VECTOR_SIZE 4
     // 矩阵乘法，默认A,B,C是行优先存储，
     template <const uint BM, const uint BN, const uint BK, const uint TM, const uint TN>
     __global__ void matmul(
@@ -40,120 +39,141 @@ namespace CUDA_KERNELS
         const float beta,
         float *C)
     {
-        // 处理边界条件，考虑使用向量化加速
+        const dim3 small_C_dim = {CEIL_DIV(BN, TN), CEIL_DIV(BM, TM)};
+        /*
+        small_C_dim是这个block要计算的C(M*N)的一个小块(BM*BN)按照TM*TN分块之后的维度
+        */
 
-        // i\in [0,I), M=I\times BM, 是分块矩阵A和C的行数
-        // j\in [0,J), N=J\times BN, 是分块矩阵B和C的列数
-        const uint C_row_index_i = blockIdx.y; // i
-        const uint C_col_index_j = blockIdx.x; // j
-        // K=U\times BK,是分块后小矩阵A_{m_i}再次分块的列数，也是分块后小矩阵B_{n_j}再次分块的行数
-        // 分块后小矩阵C_{m_in_j}需要U个A_{m_ik_u}*B_{k_un_j}相加
-        const uint U = CEIL_DIV(K, BK);
+        const uint threadRow = threadIdx.x / small_C_dim.x;
+        const uint threadColumn = threadIdx.x % small_C_dim.x;
+        /*
+        这个线程计算的小矩阵的行数和列数范围是
+        行：[threadRow * TM, threadRow * TM + TM)
+        列：[threadColumn * TN, threadColumn * TN + TN)
+        */
+        float threadResults[TM * TN] = {0.0}; // 这个线程计算的小矩阵的所有元素
 
-        // BM=T\times TM, BN=S\times TN
-        // T是As分块后的行数，S是Bs分块后的列数
-        // T和S也是小矩阵Cs分块后的行数和列数
-        const dim3 Cs_dim = {CEIL_DIV(BN, TN), CEIL_DIV(BM, TM)}; // S列,T行
-        // t是当前线程负责的Cs分块后的小矩阵的行下标
-        const uint Cs_row_t = threadIdx.x / Cs_dim.x; //(Idx)/S\in [0,T)
-        // s是当前线程负责的Cs分块后的小矩阵的列下标
-        const uint Cs_col_s = threadIdx.x % Cs_dim.x; //(Idx)%S\in [0,S)
+        const uint currentRow = blockIdx.y;
+        const uint currentColumn = blockIdx.x;
+        /*
+        currentRow和currentColumn是这个block要计算的C(M*N)的一个小块(BM*BN)的这个矩阵的索引
+        */
 
-        // 当前线程负责计算的TM*TN个元素
-        float Cs_m_t_n_s[TM * TN] = {0.0};
+        A += currentRow * BM * K;
+        const uint global_A_row = currentRow * BM;
+        uint global_A_col = 0;
+        B += currentColumn * BN;
+        uint global_B_row = 0;
+        const uint global_B_col = currentColumn * BN;
 
-        // 当前block计算时需要的分块矩阵数据
+        C += currentRow * BM * N + currentColumn * BN;
+        const uint global_C_row = currentRow * BM;
+        const uint global_C_col = currentColumn * BN;
+
         __shared__ float As[BM * BK];
         __shared__ float Bs[BK * BN];
+        /*
+        一个block的线程一共有small_C_dim.x * small_C_dim.y个,
+        这个值会比BM*BK以及BK*BN小，因此没办法每个线程加载一个元素就将所有元素加载到共享内存中
+        可以隔几行加载一个元素，
+        但不能隔固定位置加载一个元素，固定的偏差在大矩阵中向下移动的距离是不一样的
+        这里隔的行数就是strideA和strideB
+        这个也是一个block的线程一次可以加载的行数
+        一个block一次加载stride行，那么有row行，就加载row/stride次
+        */
 
-        // 移动指针到当前block需要计算的C_{m_in_j}的起始位置
-        A += C_row_index_i * BM * K;                      // 向下移动i行，每一个小的分块矩阵的行数是BM，大矩阵每一行有K个元素
-        B += C_col_index_j * BN;                          // 向右移动j列，每一个小的分块矩阵的列数是BN
-        C += C_row_index_i * BM * N + C_col_index_j * BN; // 向右移动j列，每一个小的分块矩阵的列数是BN，向下移动i行，每一个小的分块矩阵的行数是BM,大矩阵每一行有N个元素
+        const uint innerRowA = threadIdx.x / BK;
+        const uint innerColumnA = threadIdx.x % BK;
+        const uint strideA = small_C_dim.x * small_C_dim.y / BK;
 
-        // 下面是给每个线程分配加载数据的任务
-        const uint As_row = threadIdx.x / (BK / VECTOR_SIZE); // 最大为VECTOR_SIZE*T*S/(B*K)-1
-        const uint As_col = threadIdx.x % (BK / VECTOR_SIZE); // 最大为B*K/VECTOR_SIZE-1
-        // 需要重复加载的次数
-        const uint strideA = BM * BK / VECTOR_SIZE / (Cs_dim.x * Cs_dim.y); // 数据总数（按照四个元素挨着的那种计算）处以线程总数
+        const uint innerRowB = threadIdx.x / BN;
+        const uint innerColumnB = threadIdx.x % BN;
+        const uint strideB = small_C_dim.x * small_C_dim.y / BN;
 
-        const uint Bs_row = threadIdx.x / (BN / VECTOR_SIZE);
-        const uint Bs_col = threadIdx.x % (BN / VECTOR_SIZE);
-        const uint strideB = BK * BN / VECTOR_SIZE / (Cs_dim.x * Cs_dim.y);
+        const uint outer_dot_nums = CEIL_DIV(K, BK);
 
-        // 外层循环，循环U次，每次计算一个小矩阵C_{m_in_j}（对于整个block来说，对于这个线程来说是计算这个小矩阵中的一个小分块）
-        for (uint u = 0; u < U; u++)
+        // float register_cache_A;
+        float register_cache_A[TM] = {0};
+        float register_cache_B[TN] = {0};
+
+        for (uint outer_dot_index = 0; outer_dot_index < outer_dot_nums; outer_dot_index++)
         {
-            // 将这个block计算需要的As和Bs加载到共享内存中
-            for (uint loadOffset = 0; loadOffset < strideA; loadOffset++)
+            for (uint _row_load_offset = 0; _row_load_offset < BM; _row_load_offset += strideA)
             {
-                uint aIndex = (As_row + loadOffset) * K + As_col * VECTOR_SIZE;
-                // 获取As的第As_row行，第As_col列到第(As_col+3)列的数据
-                const float4 tmp = reinterpret_cast<const float4 *>(&A[aIndex])[0];
-                // 将数据转置后加载到共享内存中
-                As[(As_col * VECTOR_SIZE + 0) * BM + As_row + loadOffset] = tmp.x;
-                As[(As_col * VECTOR_SIZE + 1) * BM + As_row + loadOffset] = tmp.y;
-                As[(As_col * VECTOR_SIZE + 2) * BM + As_row + loadOffset] = tmp.z;
-                As[(As_col * VECTOR_SIZE + 3) * BM + As_row + loadOffset] = tmp.w;
-            }
-            for (uint loadOffset = 0; loadOffset < strideB; loadOffset++)
-            {
-                uint bIndex = (Bs_row + loadOffset) * N + Bs_col * VECTOR_SIZE;
-                // 获取Bs的第Bs_row行，第Bs_col列到第(Bs_col+3)列的数据
-                reinterpret_cast<float4 *>(&Bs[(Bs_row + loadOffset) * BN + Bs_col * VECTOR_SIZE])[0] =
-                    reinterpret_cast<const float4 *>(&B[bIndex])[0];
-            }
-            __syncthreads();
-            A += BK;     // A向右移动BK
-            B += BK * N; // B向下移动BK
-
-            // 来到当前线程要计算的Cs_{m_tn_s}=As_{m_t}Bs_{n_s}
-            // As_{m_t}：TM*BK, Bs_{n_s}:BK*TN, Cs_{m_tn_s}:TM*TN
-            // for (uint _As_m_t_row = 0; _As_m_t_row < TM; _As_m_t_row++)
-            // {
-            //     for (uint _Bs_n_s = 0; _Bs_n_s < TN; _Bs_n_s++)
-            //     {
-            //         for (uint _dot_index = 0; _dot_index < BK; _dot_index++)
-            //         {
-            //             Cs_m_t_n_s[_As_m_t_row * TN + _Bs_n_s] +=
-            //                 As[_dot_index * BM + Cs_row_t * TM + _As_m_t_row] * // As是转置的
-            //                 Bs[_dot_index * BN + _Bs_n_s + Cs_col_s * TN];
-            //         }
-            //     }
-            // }
-
-            // 根据上面的逻辑进行改写优化
-            for (uint _dot_index = 0; _dot_index < BK; _dot_index++)
-            {
-                for (uint _As_m_t_row = 0; _As_m_t_row < TM; _As_m_t_row++)
+                const uint _global_A_row_offset = innerRowA + _row_load_offset;
+                const uint _global_A_col_offset = innerColumnA;
+                if (global_A_col + _global_A_col_offset < K && global_A_row + _global_A_row_offset < M)
                 {
-                    for (uint _Bs_n_s = 0; _Bs_n_s < TN; _Bs_n_s++)
+                    // 加载A并转置后存到As
+                    As[innerColumnA * BM + _global_A_row_offset] =
+                        A[(_global_A_row_offset)*K + innerColumnA];
+                }
+                else
+                {
+                    As[innerColumnA * BM + _global_A_row_offset] = 0.0;
+                }
+            }
+
+            for (uint _row_load_offset = 0; _row_load_offset < BK; _row_load_offset += strideB)
+            {
+                const uint _global_B_row_offset = innerRowB + _row_load_offset;
+                const uint _global_B_col_offset = innerColumnB;
+                if (global_B_col + _global_B_col_offset < N && global_B_row + _global_B_row_offset < K)
+                {
+                    Bs[(_global_B_row_offset)*BN + innerColumnB] =
+                        B[(_global_B_row_offset)*N + innerColumnB];
+                }
+                else
+                {
+                    Bs[(_global_B_row_offset)*BN + innerColumnB] = 0.0;
+                }
+            }
+
+            __syncthreads();
+
+            A += BK;
+            global_A_col += BK;
+            B += BK * N;
+            global_B_row += BK;
+
+            for (uint inner_dot_index = 0; inner_dot_index < BK; inner_dot_index++)
+            {
+                for (uint resIdxN = 0; resIdxN < TN; resIdxN++)
+                {
+                    // 取Bs的第inner_dot_index*BN行的threadColumn*TN+resIdxN列
+                    register_cache_B[resIdxN] = Bs[inner_dot_index * BN + threadColumn * TN + resIdxN];
+                }
+                for (uint resIdxM = 0; resIdxM < TM; resIdxM++)
+                {
+                    // 取As的数据，但是要转置回去
+                    register_cache_A[resIdxM] = As[inner_dot_index * BM + threadRow * TM + resIdxM];
+
+                    for (uint resIdxN = 0; resIdxN < TN; resIdxN++)
                     {
-                        Cs_m_t_n_s[_As_m_t_row * TN + _Bs_n_s] +=
-                            As[_dot_index * BM + Cs_row_t * TM + _As_m_t_row] * // As是转置的
-                            Bs[_dot_index * BN + _Bs_n_s + Cs_col_s * TN];
+                        threadResults[resIdxM * TN + resIdxN] +=
+                            register_cache_A[resIdxM] *
+                            register_cache_B[resIdxN];
                     }
                 }
             }
             __syncthreads();
         }
 
-        // 将计算结果写回去
-        for (uint _res_row = 0; _res_row < TM; _res_row++)
+        for (uint resIdxM = 0; resIdxM < TM; resIdxM++)
         {
-            for (uint _res_col = 0; _res_col < TN; _res_col += VECTOR_SIZE)
+            for (uint resIdxN = 0; resIdxN < TN; resIdxN++)
             {
-                float4 tmp = reinterpret_cast<float4 *>(&C[(Cs_row_t * TM + _res_row) * N + Cs_col_s * TN + _res_col])[0];
-                tmp.x = alpha * Cs_m_t_n_s[_res_row * TN + _res_col] + beta * tmp.x;
-                tmp.y = alpha * Cs_m_t_n_s[_res_row * TN + _res_col + 1] + beta * tmp.y;
-                tmp.z = alpha * Cs_m_t_n_s[_res_row * TN + _res_col + 2] + beta * tmp.z;
-                tmp.w = alpha * Cs_m_t_n_s[_res_row * TN + _res_col + 3] + beta * tmp.w;
-
-                reinterpret_cast<float4 *>(&C[(Cs_row_t * TM + _res_row) * N + Cs_col_s * TN + _res_col])[0] = tmp;
+                const uint _global_C_row_offset = threadRow * TM + resIdxM;
+                const uint _global_C_col_offset = threadColumn * TN + resIdxN;
+                if (global_C_row + _global_C_row_offset < M && global_C_col + _global_C_col_offset < N)
+                {
+                    C[_global_C_row_offset * N + _global_C_col_offset] =
+                        alpha * threadResults[resIdxM * TN + resIdxN] +
+                        beta * C[_global_C_row_offset * N + _global_C_col_offset];
+                }
             }
         }
     }
-
     __global__ void matadd(const float *A,
                            const float *B,
                            const int m,
@@ -416,7 +436,7 @@ namespace Math
             const uint BM = 128;
             const uint BN = 128;
             dim3 gridDim(CEIL_DIV(input.cols_num, BN), CEIL_DIV(this->rows_num, BM));
-            dim3 blockDim((BM * BN) / TM * TN);
+            dim3 blockDim((BM * BN) / (TM * TN));
             CUDA_KERNELS::matmul<BM, BN, BK, TM, TN><<<gridDim, blockDim>>>(this->rows_num, input.cols_num, this->cols_num, 1.0, d_this, d_input, 0.0, d_output);
         }
         else
@@ -424,7 +444,7 @@ namespace Math
             const uint BM = 64;
             const uint BN = 64;
             dim3 gridDim(CEIL_DIV(input.cols_num, BN), CEIL_DIV(this->rows_num, BM));
-            dim3 blockDim((BM * BN) / TM * TN);
+            dim3 blockDim((BM * BN) / (TM * TN));
             CUDA_KERNELS::matmul<BM, BN, BK, TM, TN><<<gridDim, blockDim>>>(this->rows_num, input.cols_num, this->cols_num, 1.0, d_this, d_input, 0.0, d_output);
         }
 
