@@ -733,6 +733,42 @@ namespace Math
         // 将结果复制回来
         output.copy_device_to_host();
     }
+
+    template <Arithmetic MatrixDataType>
+    void Matrix<MatrixDataType>::add(
+        const Matrix<MatrixDataType> &input,
+        Matrix<MatrixDataType> &output) const
+    {
+        if (this->rows_num != input.rows_num || this->rows_num != output.rows_num || this->cols_num != input.cols_num || this->cols_num != output.cols_num)
+        {
+            throw std::runtime_error("The matrix shape is not the same");
+        }
+
+        if (!std::is_same<MatrixDataType, float>::value)
+        {
+            throw std::runtime_error("The matrix data type is not float");
+        }
+
+        this->cuda();
+        input.cuda();
+        output.cuda();
+
+        dim3 blockDim(16, 16);
+        dim3 gridDim(CEIL_DIV(this->rows_num, blockDim.x), CEIL_DIV(this->cols_num, blockDim.y));
+        CUDA_KERNELS::matadd_row_major<<<gridDim, blockDim>>>(this->gpu_device_data, input.gpu_device_data, this->rows_num, this->cols_num, output.gpu_device_data);
+
+        // 将结果复制回来
+        output.copy_device_to_host();
+    }
+
+    template <Arithmetic MatrixDataType>
+    Matrix<MatrixDataType> Matrix<MatrixDataType>::add(
+        const Matrix<MatrixDataType> &matrix) const
+    {
+        Matrix<MatrixDataType> output = Matrix<MatrixDataType>::zeros(this->rows_num, matrix.cols_num);
+        this->add(matrix, output);
+        return output;
+    }
 }
 
 namespace DataSet
