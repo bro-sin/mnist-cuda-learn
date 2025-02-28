@@ -326,13 +326,18 @@ namespace CUDA_KERNELS
         }
     }
 
-    __global__ void matadd(const float *A,
-                           const float *B,
-                           const int m,
-                           const int n,
-                           float *C)
+    __global__ void matadd_row_major(const float *A,
+                                     const float *B,
+                                     const int M,
+                                     const int N,
+                                     float *C)
     {
-        return;
+        const int i = blockIdx.x * blockDim.x + threadIdx.x;
+        const int j = blockIdx.y * blockDim.y + threadIdx.y;
+        if (i < M && j < N)
+        {
+            C[i * N + j] = A[i * N + j] + B[i * N + j];
+        }
     }
 }
 
@@ -357,10 +362,13 @@ namespace Math
     {
     public:
         MatrixDataType *data;
+        mutable MatrixDataType *gpu_device_data = nullptr;
         uint rows_num;
         uint cols_num;
         const bool is_external_data = false; // 用于判断data是外界传入的还是内部创建的，默认数据是内部创建的，应当在析构函数中释放内存
+        const bool is_external_gpu_device_data = false;
         Axis major_axis = Axis::Row;
+        mutable bool use_gpu = false;
 
         Matrix(); // 完全用于内部创建对象
 
@@ -371,10 +379,21 @@ namespace Math
                uint rows_num,
                uint cols_num,
                Axis major_axis = Axis::Row); // 给外面调用的构造函数，保持is_external_data为true
+        Matrix(MatrixDataType *data,
+               MatrixDataType *gpu_device_data, // 这个构造函数应当保持is_external_gpu_device_data为true
+               uint rows_num,
+               uint cols_num,
+               Axis major_axis = Axis::Row); // 给外面调用的构造函数，保持is_external_data为true
         Matrix(const Matrix<MatrixDataType> &matrix);
         ~Matrix();
 
+        void init_cuda() const;
+        void cuda() const;
+        void copy_host_to_device() const;
+        void copy_device_to_host();
+
         void show() const;
+        std::string get_matrix_info() const;
 
         MatrixDataType get_item(uint row, uint col) const;
 
@@ -396,6 +415,9 @@ namespace Math
 
         Matrix<MatrixDataType> multiply(const Matrix<MatrixDataType> &matrix) const;
         void multiply(const Matrix<MatrixDataType> &input, Matrix<MatrixDataType> &output) const;
+
+        Matrix<MatrixDataType> add(const Matrix<MatrixDataType> &matrix) const;
+        void add(const Matrix<MatrixDataType> &input, Matrix<MatrixDataType> &output) const;
     };
 }
 
@@ -414,6 +436,25 @@ namespace Math
           cols_num(cols_num),
           major_axis(major_axis),
           is_external_data(true)
+    {
+    }
+
+    template <Arithmetic MatrixDataType>
+    Matrix<MatrixDataType>::Matrix(
+        // 外部传入数据的构造函数
+        MatrixDataType *data,
+        MatrixDataType *gpu_device_data,
+        uint rows_num,
+        uint cols_num,
+        Axis major_axis)
+        : data(data),
+          gpu_device_data(gpu_device_data),
+          rows_num(rows_num),
+          cols_num(cols_num),
+          major_axis(major_axis),
+          is_external_data(true),
+          is_external_gpu_device_data(true),
+          use_gpu(true)
     {
     }
 
@@ -441,6 +482,64 @@ namespace Math
             delete[] this->data;
         }
         this->data = nullptr;
+        if (!this->is_external_gpu_device_data)
+        {
+            cudaFree(this->gpu_device_data);
+        }
+        this->gpu_device_data = nullptr;
+    }
+
+    template <Arithmetic MatrixDataType>
+    void Matrix<MatrixDataType>::init_cuda() const
+    {
+        assert(!this->is_external_gpu_device_data && this->gpu_device_data == nullptr);
+        cudaError_t malloc_result = cudaMalloc(&this->gpu_device_data, this->rows_num * this->cols_num * sizeof(MatrixDataType));
+        if (malloc_result != cudaSuccess)
+        {
+            std::string error_message = "CUDA Error: Failed to malloc gpu memory in ";
+            error_message += "File: " + std::string(__FILE__) + " Line: " + std::to_string(__LINE__) + "\n";
+            error_message += this->get_matrix_info();
+            error_message += "CUDA Error: " + std::string(cudaGetErrorString(malloc_result)) + "\n";
+            throw std::runtime_error(error_message);
+        }
+        this->use_gpu = true;
+    }
+    template <Arithmetic MatrixDataType>
+    void Matrix<MatrixDataType>::cuda() const
+    {
+        if (!this->use_gpu)
+        {
+            this->init_cuda();
+            this->copy_host_to_device();
+        }
+    }
+
+    template <Arithmetic MatrixDataType>
+    void Matrix<MatrixDataType>::copy_host_to_device() const
+    {
+        assert(!this->is_external_gpu_device_data); // 如果是外部传入的gpu_device_data，不应该调用这个函数
+        cudaError_t cpy_result = cudaMemcpy(this->gpu_device_data, this->data, this->rows_num * this->cols_num * sizeof(MatrixDataType), cudaMemcpyHostToDevice);
+        if (cpy_result != cudaSuccess)
+        {
+            std::string error_message = "CUDA Error: Failed to copy data from host to device in ";
+            error_message += "File: " + std::string(__FILE__) + " Line: " + std::to_string(__LINE__) + "\n";
+            error_message += this->get_matrix_info();
+            error_message += "CUDA Error: " + std::string(cudaGetErrorString(cpy_result)) + "\n";
+            throw std::runtime_error(error_message);
+        }
+    }
+    template <Arithmetic MatrixDataType>
+    void Matrix<MatrixDataType>::copy_device_to_host()
+    {
+        cudaError_t cpy_result = cudaMemcpy(this->data, this->gpu_device_data, this->rows_num * this->cols_num * sizeof(MatrixDataType), cudaMemcpyDeviceToHost);
+        if (cpy_result != cudaSuccess)
+        {
+            std::string error_message = "CUDA Error: Failed to copy data from device to host in ";
+            error_message += "File: " + std::string(__FILE__) + " Line: " + std::to_string(__LINE__) + "\n";
+            error_message += this->get_matrix_info();
+            error_message += "CUDA Error: " + std::string(cudaGetErrorString(cpy_result)) + "\n";
+            throw std::runtime_error(error_message);
+        }
     }
 
     template <Arithmetic MatrixDataType>
@@ -486,6 +585,18 @@ namespace Math
     {
         return this->data[this->get_index(row, col)];
     }
+
+    template <Arithmetic MatrixDataType>
+    std::string Matrix<MatrixDataType>::get_matrix_info() const
+    {
+        std::string matrix_info = "Matrix Info:\n";
+        matrix_info += "  Rows: " + std::to_string(this->rows_num) + " Columns: " + std::to_string(this->cols_num) + "\n";
+        matrix_info += "  Major Axis: " + std::string(this->major_axis == Axis::Row ? "Row" : "Column") + "\n";
+        matrix_info += "  Data From External: " + std::string(this->is_external_data ? "True" : "False") + "\n";
+        matrix_info += "  GPU Data From External: " + std::string(this->is_external_gpu_device_data ? "True" : "False") + "\n";
+        return matrix_info;
+    }
+
     template <Arithmetic MatrixDataType>
     void Matrix<MatrixDataType>::show() const
     {
@@ -571,14 +682,17 @@ namespace Math
             throw std::runtime_error("The matrix data type is not float");
         }
 
-        // 调用cuda的矩阵乘法
-        float *d_this, *d_input, *d_output;
-        cudaMalloc(&d_this, this->rows_num * this->cols_num * sizeof(float));
-        cudaMalloc(&d_input, input.rows_num * input.cols_num * sizeof(float));
-        cudaMalloc(&d_output, output.rows_num * output.cols_num * sizeof(float));
-        // 先将数据复制到CUDA上面
-        cudaMemcpy(d_this, this->data, sizeof(float) * this->rows_num * this->cols_num, cudaMemcpyHostToDevice);
-        cudaMemcpy(d_input, input.data, sizeof(float) * input.rows_num * input.cols_num, cudaMemcpyHostToDevice);
+        // // 调用cuda的矩阵乘法
+        // float *d_this, *d_input, *d_output;
+        // cudaMalloc(&d_this, this->rows_num * this->cols_num * sizeof(float));
+        // cudaMalloc(&d_input, input.rows_num * input.cols_num * sizeof(float));
+        // cudaMalloc(&d_output, output.rows_num * output.cols_num * sizeof(float));
+        // // 先将数据复制到CUDA上面
+        // cudaMemcpy(d_this, this->data, sizeof(float) * this->rows_num * this->cols_num, cudaMemcpyHostToDevice);
+        // cudaMemcpy(d_input, input.data, sizeof(float) * input.rows_num * input.cols_num, cudaMemcpyHostToDevice);
+        this->cuda();
+        input.cuda();
+        output.cuda();
 
         const uint BK = 8;
         const uint TM = 8;
@@ -592,11 +706,11 @@ namespace Math
             if (this->major_axis == Axis::Row)
             {
 
-                CUDA_KERNELS::matmul_row_major<BM, BN, BK, TM, TN><<<gridDim, blockDim>>>(this->rows_num, input.cols_num, this->cols_num, 1.0, d_this, d_input, 0.0, d_output);
+                CUDA_KERNELS::matmul_row_major<BM, BN, BK, TM, TN><<<gridDim, blockDim>>>(this->rows_num, input.cols_num, this->cols_num, 1.0, this->gpu_device_data, input.gpu_device_data, 0.0, output.gpu_device_data);
             }
             else
             {
-                CUDA_KERNELS::matmul_with_A_col_major_and_B_C_row_major<BM, BN, BK, TM, TN><<<gridDim, blockDim>>>(this->rows_num, input.cols_num, this->cols_num, 1.0, d_this, d_input, 0.0, d_output);
+                CUDA_KERNELS::matmul_with_A_col_major_and_B_C_row_major<BM, BN, BK, TM, TN><<<gridDim, blockDim>>>(this->rows_num, input.cols_num, this->cols_num, 1.0, this->gpu_device_data, input.gpu_device_data, 0.0, output.gpu_device_data);
             }
         }
         else
@@ -608,20 +722,16 @@ namespace Math
             if (this->major_axis == Axis::Row)
             {
 
-                CUDA_KERNELS::matmul_row_major<BM, BN, BK, TM, TN><<<gridDim, blockDim>>>(this->rows_num, input.cols_num, this->cols_num, 1.0, d_this, d_input, 0.0, d_output);
+                CUDA_KERNELS::matmul_row_major<BM, BN, BK, TM, TN><<<gridDim, blockDim>>>(this->rows_num, input.cols_num, this->cols_num, 1.0, this->gpu_device_data, input.gpu_device_data, 0.0, output.gpu_device_data);
             }
             else
             {
-                CUDA_KERNELS::matmul_with_A_col_major_and_B_C_row_major<BM, BN, BK, TM, TN><<<gridDim, blockDim>>>(this->rows_num, input.cols_num, this->cols_num, 1.0, d_this, d_input, 0.0, d_output);
+                CUDA_KERNELS::matmul_with_A_col_major_and_B_C_row_major<BM, BN, BK, TM, TN><<<gridDim, blockDim>>>(this->rows_num, input.cols_num, this->cols_num, 1.0, this->gpu_device_data, input.gpu_device_data, 0.0, output.gpu_device_data);
             }
         }
 
         // 将结果复制回来
-        cudaMemcpy(output.data, d_output, sizeof(float) * output.rows_num * output.cols_num, cudaMemcpyDeviceToHost);
-        // 释放内存
-        cudaFree(d_this);
-        cudaFree(d_input);
-        cudaFree(d_output);
+        output.copy_device_to_host();
     }
 }
 
