@@ -412,6 +412,35 @@ namespace CUDA_KERNELS
             B[row] = tmp_sum_result;
         }
     }
+
+    // A和B的数据排列顺序是一致的，例如都是行优先
+    __global__ void mat_relu(const float *A, const uint length, float *B)
+    {
+
+        const uint index = (blockIdx.y * blockDim.y + threadIdx.y) * (gridDim.x * blockDim.x) + (blockIdx.x * blockDim.x + threadIdx.x);
+        if (index < length)
+        {
+            B[index] = fmaxf(0.0f, A[index]);
+        }
+    }
+
+    // input,grad_output,grad_input都是行优先
+    __global__ void mat_relu_backward(const float *input, const uint length, const float *grad_output, float *grad_input)
+    {
+
+        const uint index = (blockIdx.y * blockDim.y + threadIdx.y) * (gridDim.x * blockDim.x) + (blockIdx.x * blockDim.x + threadIdx.x);
+        if (index < length)
+        {
+            if (input[index] > 0)
+            {
+                grad_input[index] = grad_output[index];
+            }
+            else
+            {
+                grad_input[index] = 0.0f;
+            }
+        }
+    }
 }
 
 namespace Math
@@ -496,6 +525,10 @@ namespace Math
         void add_assign(const Matrix<MatrixDataType> &matrix);
 
         void sum(Matrix<MatrixDataType> &output, const Axis axis) const;
+
+        void relu(Matrix<MatrixDataType> &output) const;
+        void relu();
+        Matrix<MatrixDataType> get_relu_matrix() const;
     };
 }
 
@@ -924,6 +957,36 @@ namespace Math
         }
         output.copy_device_to_host();
     }
+
+    template <Arithmetic MatrixDataType>
+    void Matrix<MatrixDataType>::relu(
+        Matrix<MatrixDataType> &output) const
+    {
+        this->cuda();
+        output.cuda();
+        dim3 blockDim(16, 16);
+        dim3 gridDim(CEIL_DIV(this->cols_num, blockDim.x), CEIL_DIV(this->rows_num, blockDim.y));
+        CUDA_KERNELS::mat_relu<<<gridDim, blockDim>>>(this->gpu_device_data, this->rows_num * this->cols_num, output.gpu_device_data);
+        output.copy_device_to_host();
+    }
+
+    template <Arithmetic MatrixDataType>
+    void Matrix<MatrixDataType>::relu()
+    {
+        this->cuda();
+        dim3 blockDim(16, 16);
+        dim3 gridDim(CEIL_DIV(this->cols_num, blockDim.x), CEIL_DIV(this->rows_num, blockDim.y));
+        CUDA_KERNELS::mat_relu<<<gridDim, blockDim>>>(this->gpu_device_data, this->rows_num * this->cols_num, this->gpu_device_data);
+        this->copy_device_to_host();
+    }
+
+    template <Arithmetic MatrixDataType>
+    Matrix<MatrixDataType> Matrix<MatrixDataType>::get_relu_matrix() const
+    {
+        Matrix<MatrixDataType> output = this->clone();
+        this->relu(output);
+        return output;
+    }
 }
 
 namespace NeuralNetwork
@@ -951,6 +1014,20 @@ namespace NeuralNetwork
         Math::Matrix<float> forward(const Math::Matrix<float> &input) const;
 
         void backward(const Math::Matrix<float> &grad_output, const Math::Matrix<float> &input);
+    };
+
+    class ReLU
+    {
+    private:
+        /* data */
+    public:
+        ReLU(/* args */);
+        ~ReLU();
+        void forward(const Math::Matrix<float> &input, Math::Matrix<float> &output) const;
+        void forward(Math::Matrix<float> &input) const;
+        // Math::Matrix<float> forward(const Math::Matrix<float> &input) const;
+
+        void backward(const Math::Matrix<float> &grad_output, const Math::Matrix<float> &input, Math::Matrix<float> &grad_input);
     };
 
 } // namespace NeuralNetwork
@@ -1019,6 +1096,42 @@ namespace NeuralNetwork
 
 } // namespace NeuralNetwork
 
+namespace NeuralNetwork
+{
+    ReLU::ReLU(/* args */)
+    {
+    }
+
+    ReLU::~ReLU()
+    {
+    }
+
+    void ReLU::forward(const Math::Matrix<float> &input, Math::Matrix<float> &output) const
+    {
+        input.relu(output);
+    }
+
+    void ReLU::forward(Math::Matrix<float> &input) const
+    {
+        input.relu();
+    }
+
+    void ReLU::backward(const Math::Matrix<float> &grad_output, const Math::Matrix<float> &input, Math::Matrix<float> &grad_input)
+    {
+        dim3 blockDim(16, 16);
+        dim3 gridDim(CEIL_DIV(input.cols_num, blockDim.x), CEIL_DIV(input.rows_num, blockDim.y));
+        // 要求三个的维度和优先维度一致
+        assert(input.rows_num == grad_output.rows_num && input.cols_num == grad_output.cols_num);
+        assert(input.rows_num == grad_input.rows_num && input.cols_num == grad_input.cols_num);
+        assert(input.major_axis == grad_output.major_axis && input.major_axis == grad_input.major_axis);
+        input.cuda();
+        grad_output.cuda();
+        grad_input.cuda();
+        CUDA_KERNELS::mat_relu_backward<<<gridDim, blockDim>>>(input.gpu_device_data, input.rows_num * input.cols_num, grad_output.gpu_device_data, grad_input.gpu_device_data);
+        grad_input.copy_device_to_host();
+    }
+}
+
 namespace DataSet
 {
     class MnistData
@@ -1083,5 +1196,9 @@ int main()
     const uint batch_size = 4;
     Math::Matrix<float> input = Math::Matrix<float>::ones(3, batch_size);
     Math::Matrix<float> output = linear.forward(input);
+    output.show();
+
+    ReLU relu = ReLU();
+    relu.forward(output);
     output.show();
 }
