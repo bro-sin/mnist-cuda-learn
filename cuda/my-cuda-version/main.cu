@@ -441,6 +441,31 @@ namespace CUDA_KERNELS
             }
         }
     }
+
+    __global__ void softmax_row_major(
+        const float *input, const uint M, const uint N, float *output)
+    {
+        const uint row = blockIdx.y * blockDim.y + threadIdx.y;
+        const uint col = blockIdx.x * blockDim.x + threadIdx.x;
+        if (row < M && col < N)
+        {
+            float max_val = input[col];
+            for (uint i = 1; i < M; i++)
+            {
+                max_val = fmaxf(max_val, input[i * N + col]);
+            }
+
+            float sum = 0.0f;
+            for (uint i = 0; i < M; i++)
+            {
+                sum += expf(input[i * N + col] - max_val);
+            }
+
+            // TODO: 将上面找最大值和计算sum的过程分配给一个block中的所有线程去做
+
+            output[row * N + col] = expf(input[row * N + col] - max_val) / sum;
+        }
+    }
 }
 
 namespace Math
@@ -1030,6 +1055,19 @@ namespace NeuralNetwork
         void backward(const Math::Matrix<float> &grad_output, const Math::Matrix<float> &input, Math::Matrix<float> &grad_input);
     };
 
+    class SoftMax
+    {
+    private:
+        /* data */
+    public:
+        SoftMax(/* args */);
+        ~SoftMax();
+        void forward(const Math::Matrix<float> &input, Math::Matrix<float> &output) const;
+        void forward(Math::Matrix<float> &input) const;
+
+        void backward(const Math::Matrix<float> &grad_output, const Math::Matrix<float> &input, Math::Matrix<float> &grad_input);
+    };
+
 } // namespace NeuralNetwork
 
 namespace NeuralNetwork
@@ -1131,6 +1169,23 @@ namespace NeuralNetwork
         grad_input.copy_device_to_host();
     }
 }
+
+namespace NeuralNetwork
+{
+    void SoftMax::forward(const Math::Matrix<float> &input, Math::Matrix<float> &output) const
+    {
+        assert(input.major_axis == Math::Axis::Row);
+        assert(output.major_axis == Math::Axis::Row);
+        // 维度相等
+        assert(input.rows_num == output.rows_num && input.cols_num == output.cols_num);
+        input.cuda();
+        output.cuda();
+        dim3 blockDim(16, 16);
+        dim3 gridDim(CEIL_DIV(input.cols_num, blockDim.x), CEIL_DIV(input.rows_num, blockDim.y));
+        CUDA_KERNELS::softmax_row_major<<<gridDim, blockDim>>>(input.gpu_device_data, input.rows_num, input.cols_num, output.gpu_device_data);
+        output.copy_device_to_host();
+    }
+} // namespace NeuralNetwork
 
 namespace DataSet
 {
