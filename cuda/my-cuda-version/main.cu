@@ -31,9 +31,9 @@ namespace CUDA_KERNELS
     // C=alpha*A*B+beta*C
     template <const uint BM, const uint BN, const uint BK, const uint TM, const uint TN>
     __global__ void matmul_row_major(
-        const int M,
-        const int N,
-        const int K,
+        const uint M,
+        const uint N,
+        const uint K,
         const float alpha,
         const float *A,
         const float *B,
@@ -180,9 +180,9 @@ namespace CUDA_KERNELS
     // C=alpha*A*B+beta*C
     template <const uint BM, const uint BN, const uint BK, const uint TM, const uint TN>
     __global__ void matmul_with_A_col_major_and_B_C_row_major(
-        const int M,
-        const int N,
-        const int K,
+        const uint M,
+        const uint N,
+        const uint K,
         const float alpha,
         const float *A, // 列优先
         const float *B,
@@ -328,15 +328,88 @@ namespace CUDA_KERNELS
 
     __global__ void matadd_row_major(const float *A,
                                      const float *B,
-                                     const int M,
-                                     const int N,
+                                     const uint M,
+                                     const uint N,
                                      float *C)
     {
-        const int i = blockIdx.x * blockDim.x + threadIdx.x;
-        const int j = blockIdx.y * blockDim.y + threadIdx.y;
-        if (i < M && j < N)
+        const uint row = blockIdx.y * blockDim.y + threadIdx.y;
+        const uint col = blockIdx.x * blockDim.x + threadIdx.x;
+        if (row < M && col < N)
         {
-            C[i * N + j] = A[i * N + j] + B[i * N + j];
+            C[row * N + col] = A[row * N + col] + B[row * N + col];
+        }
+    }
+
+    // A+=B
+    __global__ void matadd_assign_row_major(float *A,
+                                            const float *B,
+                                            const uint M,
+                                            const uint N)
+    {
+        const uint row = blockIdx.y * blockDim.y + threadIdx.y;
+        const uint col = blockIdx.x * blockDim.x + threadIdx.x;
+        if (row < M && col < N)
+        {
+            A[row * N + col] += B[row * N + col];
+        }
+    }
+
+    // A+=bias
+    __global__ void matadd_assign_bias_row_major(float *A,
+                                                 const float *bias, //[M,1]
+                                                 const uint M,
+                                                 const uint N // N在这里为batch_size
+    )
+    {
+        const uint row = blockIdx.y * blockDim.y + threadIdx.y;
+        const uint col = blockIdx.x * blockDim.x + threadIdx.x;
+        if (row < M && col < N)
+        {
+            A[row * N + col] += bias[row];
+        }
+    }
+
+    // A,B都是行优先
+    // 按行的方向求和（消去行的维度）
+    __global__ void sum_row_major_by_row(
+        const float *A, // A[M*N]
+        const uint M,
+        const uint N,
+        float *B // B[N]
+    )
+    {
+        // 每个线程负责B的一个元素
+        const uint col = (blockIdx.y * blockDim.y + threadIdx.y) * (gridDim.x * blockDim.x) + (blockIdx.x * blockDim.x + threadIdx.x);
+        if (col < N)
+        {
+            float tmp_sum_result = 0.0f;
+            for (uint row = 0; row < M; row++)
+            {
+                tmp_sum_result += A[row * N + col];
+            }
+            B[col] = tmp_sum_result;
+        }
+    }
+
+    // A,B都是行优先
+    // 按列的方向求和（消去列的维度）
+    __global__ void sum_row_major_by_col(
+        const float *A, // A[M*N]
+        const uint M,
+        const uint N,
+        float *B // B[M]
+    )
+    {
+        // 每个线程负责B的一个元素
+        const uint row = (blockIdx.y * blockDim.y + threadIdx.y) * (gridDim.x * blockDim.x) + (blockIdx.x * blockDim.x + threadIdx.x);
+        if (row < M)
+        {
+            float tmp_sum_result = 0.0f;
+            for (uint col = 0; col < N; col++)
+            {
+                tmp_sum_result += A[row * N + col];
+            }
+            B[row] = tmp_sum_result;
         }
     }
 }
@@ -388,7 +461,7 @@ namespace Math
         ~Matrix();
 
         void init_cuda() const;
-        void cuda() const;
+        void cuda() const; // TODO: 设计使用cuda之后，数据指针采用gpu上的，另外有类似的cpu版本
         void copy_host_to_device() const;
         void copy_device_to_host();
 
@@ -412,12 +485,17 @@ namespace Math
         void transpose();
         Matrix<MatrixDataType> clone() const;
         Matrix<MatrixDataType> get_transpose_matrix() const;
+        Matrix<MatrixDataType> get_tmp_transpose_matrix_with_ref_data() const;
 
         Matrix<MatrixDataType> multiply(const Matrix<MatrixDataType> &matrix) const;
         void multiply(const Matrix<MatrixDataType> &input, Matrix<MatrixDataType> &output) const;
 
         Matrix<MatrixDataType> add(const Matrix<MatrixDataType> &matrix) const;
         void add(const Matrix<MatrixDataType> &input, Matrix<MatrixDataType> &output) const;
+
+        void add_assign(const Matrix<MatrixDataType> &matrix);
+
+        void sum(Matrix<MatrixDataType> &output, const Axis axis) const;
     };
 }
 
@@ -565,6 +643,24 @@ namespace Math
         Matrix<MatrixDataType> matrix = this->clone();
         matrix.transpose();
         return matrix;
+    }
+
+    template <Arithmetic MatrixDataType>
+    Matrix<MatrixDataType> Matrix<MatrixDataType>::get_tmp_transpose_matrix_with_ref_data() const
+    { // 一般用于临时变量
+        Matrix<MatrixDataType> transposed_matrix =
+            Matrix<MatrixDataType>(
+                this->data,            // 获取原始的指针
+                this->gpu_device_data, // 获取原始的device指针
+                this->cols_num,        // 行列互换
+                this->rows_num,
+                (this->major_axis == Axis::Row) ? Axis::Column : Axis::Row // 行列互换
+            );
+        // 最好是操作之前先调用cuda,这样get_tmp_transpose_matrix_with_ref_data返回的数据和原来是一致的
+        transposed_matrix.use_gpu = this->use_gpu; // 如果原来的矩阵还没有申请gpu的内存，那么新的矩阵在后面的计算需要自己申请
+        // 似乎是不需要管use_gpu,如果之前没有use_gpu的话，原来的gpu上的指针会是nullptr
+        // 新的矩阵不会影响原来的矩阵
+        return transposed_matrix;
     }
 
     template <Arithmetic MatrixDataType>
@@ -754,11 +850,50 @@ namespace Math
         output.cuda();
 
         dim3 blockDim(16, 16);
-        dim3 gridDim(CEIL_DIV(this->rows_num, blockDim.x), CEIL_DIV(this->cols_num, blockDim.y));
+        dim3 gridDim(CEIL_DIV(this->cols_num, blockDim.x), CEIL_DIV(this->rows_num, blockDim.y));
         CUDA_KERNELS::matadd_row_major<<<gridDim, blockDim>>>(this->gpu_device_data, input.gpu_device_data, this->rows_num, this->cols_num, output.gpu_device_data);
 
         // 将结果复制回来
         output.copy_device_to_host();
+    }
+
+    template <Arithmetic MatrixDataType>
+    void Matrix<MatrixDataType>::add_assign(
+        const Matrix<MatrixDataType> &matrix)
+    {
+        // 要求输入matrix与当前matrix行数一致
+        if (this->rows_num != matrix.rows_num)
+        {
+            throw std::runtime_error("The matrix shape is not the same");
+        }
+        else if (this->cols_num != matrix.cols_num && matrix.cols_num != 1)
+        {
+            throw std::runtime_error("The matrix shape is not the same");
+        }
+        else if (this->cols_num != matrix.cols_num && matrix.cols_num == 1)
+        {
+            this->cuda();
+            matrix.cuda();
+
+            dim3 blockDim(16, 16);
+            dim3 gridDim(CEIL_DIV(this->cols_num, blockDim.x), CEIL_DIV(this->rows_num, blockDim.y));
+            CUDA_KERNELS::matadd_assign_bias_row_major<<<gridDim, blockDim>>>(this->gpu_device_data, matrix.gpu_device_data, this->rows_num, this->cols_num);
+            this->copy_device_to_host();
+        }
+        else if (this->cols_num == matrix.cols_num && this->rows_num == matrix.rows_num)
+        {
+            this->cuda();
+            matrix.cuda();
+
+            dim3 blockDim(16, 16);
+            dim3 gridDim(CEIL_DIV(this->cols_num, blockDim.x), CEIL_DIV(this->rows_num, blockDim.y));
+            CUDA_KERNELS::matadd_assign_row_major<<<gridDim, blockDim>>>(this->gpu_device_data, matrix.gpu_device_data, this->rows_num, this->cols_num);
+            this->copy_device_to_host();
+        }
+        else
+        {
+            throw std::runtime_error("The matrix shape is not the same");
+        }
     }
 
     template <Arithmetic MatrixDataType>
@@ -769,7 +904,120 @@ namespace Math
         this->add(matrix, output);
         return output;
     }
+
+    template <Arithmetic MatrixDataType>
+    void Matrix<MatrixDataType>::sum(
+        Matrix<MatrixDataType> &output, Axis axis) const
+    {
+        this->cuda();
+        output.cuda();
+        dim3 blockDim(16, 16);
+        if (axis == Axis::Row)
+        {
+            dim3 gridDim(CEIL_DIV(output.cols_num, blockDim.x * blockDim.y));
+            CUDA_KERNELS::sum_row_major_by_row<<<gridDim, blockDim>>>(this->gpu_device_data, this->rows_num, this->cols_num, output.gpu_device_data);
+        }
+        else
+        {
+            dim3 gridDim(CEIL_DIV(output.rows_num, blockDim.x * blockDim.y));
+            CUDA_KERNELS::sum_row_major_by_col<<<gridDim, blockDim>>>(this->gpu_device_data, this->rows_num, this->cols_num, output.gpu_device_data);
+        }
+        output.copy_device_to_host();
+    }
 }
+
+namespace NeuralNetwork
+{
+    class Linear
+    {
+    public:
+        const uint input_features;
+        const uint output_features;
+        Math::Matrix<float> weights;
+        Math::Matrix<float> bias;
+        Math::Matrix<float> grad_weights;
+        Math::Matrix<float> grad_bias;
+        Math::Matrix<float> grad_input;
+
+    public:
+        Linear(uint input_features, uint output_features);
+        ~Linear();
+
+        void initialize_weights();
+        void initialize_bias();
+        void initialize_parameters();
+
+        void forward(const Math::Matrix<float> &input, Math::Matrix<float> &output) const;
+        Math::Matrix<float> forward(const Math::Matrix<float> &input) const;
+
+        void backward(const Math::Matrix<float> &grad_output, const Math::Matrix<float> &input);
+    };
+
+} // namespace NeuralNetwork
+
+namespace NeuralNetwork
+{
+    Linear::Linear(uint input_features,
+                   uint output_features)
+        : input_features(input_features),
+          output_features(output_features),
+          weights(Math::Matrix<float>::zeros(output_features, input_features)),
+          bias(Math::Matrix<float>::zeros(output_features, 1)),
+          grad_weights(Math::Matrix<float>::zeros(output_features, input_features)),
+          grad_bias(Math::Matrix<float>::zeros(output_features, 1)),
+          grad_input(Math::Matrix<float>::zeros(input_features, 1))
+    {
+        this->initialize_parameters();
+    }
+
+    Linear::~Linear()
+    {
+    }
+
+    void Linear::initialize_weights()
+    {
+        const float scale = sqrtf(2.0 / (this->input_features));
+        for (uint i = 0; i < (this->weights.rows_num) * (this->weights.cols_num); i++)
+        {
+            this->weights.data[i] = ((float)rand() / RAND_MAX - 0.5f) * scale;
+        }
+    }
+    void Linear::initialize_bias()
+    {
+        // 就是0,不用变
+    }
+    void Linear::initialize_parameters()
+    {
+        this->initialize_weights();
+        this->initialize_bias();
+    }
+
+    Math::Matrix<float> Linear::forward(const Math::Matrix<float> &input) const
+    {
+        Math::Matrix<float> output = Math::Matrix<float>::zeros(this->output_features, input.cols_num);
+        this->forward(input, output);
+        return output;
+    }
+
+    void Linear::forward(const Math::Matrix<float> &input, Math::Matrix<float> &output) const
+    {
+        // output = weights * input + bias
+        this->weights.multiply(input, output);
+        output.add_assign(this->bias);
+    }
+
+    void Linear::backward(const Math::Matrix<float> &grad_output, const Math::Matrix<float> &input)
+    {
+        // grad_weights=grad_output*input^T
+        grad_output.multiply(input.get_tmp_transpose_matrix_with_ref_data(), this->grad_weights);
+
+        grad_output.sum(this->grad_bias, Math::Axis::Column);
+
+        // grad_input=weights^T*grad_output
+        this->weights.get_tmp_transpose_matrix_with_ref_data().multiply(grad_output, this->grad_input);
+    }
+
+} // namespace NeuralNetwork
 
 namespace DataSet
 {
@@ -813,19 +1061,27 @@ namespace DataSet
     }
 }
 
-// int main()
-// {
-//     using namespace Math;
-//     Matrix m = Matrix<long>::zeros(3, 4);
-//     std::cout << sizeof(m.get_item(0, 0)) << std::endl;
-//     m.show();
+int main()
+{
+    // using namespace Math;
+    // Matrix m = Matrix<long>::zeros(3, 4);
+    // std::cout << sizeof(m.get_item(0, 0)) << std::endl;
+    // m.show();
 
-//     Matrix zeros_float = Matrix<>::zeros_like(m);
-//     std::cout << sizeof(zeros_float.get_item(0, 0)) << std::endl;
-//     zeros_float.show();
+    // Matrix zeros_float = Matrix<>::zeros_like(m);
+    // std::cout << sizeof(zeros_float.get_item(0, 0)) << std::endl;
+    // zeros_float.show();
 
-//     Matrix zeros_bit = Matrix<bool>::zeros_like(m);
-//     std::cout << sizeof(zeros_bit.get_item(0, 0)) << std::endl;
-//     zeros_bit.show();
-//     zeros_bit.get_transpose_matrix().show();
-// }
+    // Matrix zeros_bit = Matrix<bool>::zeros_like(m);
+    // std::cout << sizeof(zeros_bit.get_item(0, 0)) << std::endl;
+    // zeros_bit.show();
+    // zeros_bit.get_transpose_matrix().show();
+
+    using namespace NeuralNetwork;
+    Linear linear = Linear(3, 4);
+    linear.weights.show();
+    const uint batch_size = 4;
+    Math::Matrix<float> input = Math::Matrix<float>::ones(3, batch_size);
+    Math::Matrix<float> output = linear.forward(input);
+    output.show();
+}
