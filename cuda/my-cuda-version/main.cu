@@ -466,6 +466,26 @@ namespace CUDA_KERNELS
             output[row * N + col] = expf(input[row * N + col] - max_val) / sum;
         }
     }
+
+    // N:batch_size, M:class_nums
+    __global__ void cross_entropy_loss_row_major(
+        const float *input, // 要求是先经过softmax的,[M*N]
+        const uint M,
+        const uint N,
+        const int *target, //[1*N]
+        float *loss        // 最终计算完成后*loss就是损失值
+    )
+    {
+        const uint col_index = (blockIdx.y * blockDim.y + threadIdx.y) * (gridDim.x * blockDim.x) + (blockIdx.x * blockDim.x + threadIdx.x);
+        if (col_index < N)
+        {
+            uint max_prob_index = target[col_index];
+            float max_prob = input[max_prob_index * N + col_index];
+            // 对max_prob取对数，然后取平均然后取相反数
+            // 这里交换顺序，先去对数，然后相反数，然后处以N,最后全部加起来
+            atomicAdd(loss, -logf(max_prob) / N);
+        }
+    }
 }
 
 namespace Math
@@ -1068,6 +1088,19 @@ namespace NeuralNetwork
         void backward(const Math::Matrix<float> &grad_output, const Math::Matrix<float> &input, Math::Matrix<float> &grad_input);
     };
 
+    class CrossEntropyLoss
+    {
+    private:
+        SoftMax softmax;
+
+    public:
+        CrossEntropyLoss(/* args */);
+        ~CrossEntropyLoss();
+
+        // input[10*batch_size],target[batch_size*1]
+        float forward(Math::Matrix<float> &input, Math::Matrix<int> &target) const;
+    };
+
 } // namespace NeuralNetwork
 
 namespace NeuralNetwork
@@ -1184,6 +1217,25 @@ namespace NeuralNetwork
         dim3 gridDim(CEIL_DIV(input.cols_num, blockDim.x), CEIL_DIV(input.rows_num, blockDim.y));
         CUDA_KERNELS::softmax_row_major<<<gridDim, blockDim>>>(input.gpu_device_data, input.rows_num, input.cols_num, output.gpu_device_data);
         output.copy_device_to_host();
+    }
+} // namespace NeuralNetwork
+
+namespace NeuralNetwork
+{
+    float CrossEntropyLoss::forward(Math::Matrix<float> &input, Math::Matrix<int> &target) const
+    {
+        Math::Matrix<float> softmax_output = Math::Matrix<float>::zeros_like(input);
+        this->softmax.forward(input, softmax_output);
+        Math::Matrix<float> loss_matrix = Math::Matrix<float>::zeros(1, 1);
+        loss_matrix.init_cuda();
+        loss_matrix.cuda();
+        target.cuda();
+        softmax_output.cuda();
+        dim3 blockDim(16, 16);
+        dim3 gridDim(CEIL_DIV(input.cols_num, blockDim.x));
+        CUDA_KERNELS::cross_entropy_loss_row_major<<<gridDim, blockDim>>>(softmax_output.gpu_device_data, softmax_output.rows_num, softmax_output.cols_num, target.gpu_device_data, loss_matrix.gpu_device_data);
+        loss_matrix.copy_device_to_host();
+        return loss_matrix.data[0];
     }
 } // namespace NeuralNetwork
 
