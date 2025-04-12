@@ -1,9 +1,9 @@
-#include <stdio.h>
+#include <cstdio>
 #include <cassert>
 #include <iostream>
-#include <cuda_runtime.h>
 #include <string>
 #include <concepts>
+#include <cuda_runtime.h>
 
 namespace CONSTANTS
 {
@@ -326,6 +326,22 @@ namespace CUDA_KERNELS
         }
     }
 
+    // B=A*scale
+    __global__ void matmul_by_scale_same_major_axis(
+        const float *A,
+        const uint M,
+        const uint N,
+        const float scale,
+        float *B)
+    {
+        const uint row = blockIdx.y * blockDim.y + threadIdx.y;
+        const uint col = blockIdx.x * blockDim.x + threadIdx.x;
+        if (row < M && col < N)
+        {
+            B[row * N + col] = A[row * N + col] * scale;
+        }
+    }
+
     __global__ void matadd_row_major(const float *A,
                                      const float *B,
                                      const uint M,
@@ -500,7 +516,7 @@ namespace Math
     concept Arithmetic = requires(T a, T b) {
         { a + b } -> std::convertible_to<T>;
         { a - b } -> std::convertible_to<T>;
-        { a *b } -> std::convertible_to<T>;
+        { a * b } -> std::convertible_to<T>;
         { a / b } -> std::convertible_to<T>;
     };
 
@@ -563,6 +579,7 @@ namespace Math
 
         Matrix<MatrixDataType> multiply(const Matrix<MatrixDataType> &matrix) const;
         void multiply(const Matrix<MatrixDataType> &input, Matrix<MatrixDataType> &output) const;
+        void multiply(const float scale, Matrix<MatrixDataType> &output) const;
 
         Matrix<MatrixDataType> add(const Matrix<MatrixDataType> &matrix) const;
         void add(const Matrix<MatrixDataType> &input, Matrix<MatrixDataType> &output) const;
@@ -909,6 +926,27 @@ namespace Math
     }
 
     template <Arithmetic MatrixDataType>
+    void Matrix<MatrixDataType>::multiply(
+        const float scale,
+        Matrix<MatrixDataType> &output) const
+    {
+        if (!std::is_same<MatrixDataType, float>::value)
+        {
+            throw std::runtime_error("The matrix data type is not float");
+        }
+
+        this->cuda();
+        output.cuda();
+
+        dim3 blockDim(16, 16);
+        dim3 gridDim(CEIL_DIV(this->cols_num, blockDim.x), CEIL_DIV(this->rows_num, blockDim.y));
+        CUDA_KERNELS::matmul_by_scale_same_major_axis<<<gridDim, blockDim>>>(this->gpu_device_data, this->rows_num, this->cols_num, scale, output.gpu_device_data);
+
+        // 将结果复制回来
+        output.copy_device_to_host();
+    }
+
+    template <Arithmetic MatrixDataType>
     void Matrix<MatrixDataType>::add(
         const Matrix<MatrixDataType> &input,
         Matrix<MatrixDataType> &output) const
@@ -1034,6 +1072,28 @@ namespace Math
     }
 }
 
+namespace DataSet
+{
+    class MnistData
+    {
+    private:
+        std::string images_file_path;
+        std::string labels_file_path;
+        uint num_elements;
+        float *images_data;
+        uint *labels_data;
+
+    public:
+        MnistData(std::string images_file_path,
+                  std::string labels_file_path,
+                  uint num_elements);
+        ~MnistData();
+
+        void load_images_data();
+    };
+
+}
+
 namespace NeuralNetwork
 {
     class Linear
@@ -1059,6 +1119,8 @@ namespace NeuralNetwork
         Math::Matrix<float> forward(const Math::Matrix<float> &input) const;
 
         void backward(const Math::Matrix<float> &grad_output, const Math::Matrix<float> &input);
+
+        void update_weights(float learning_rate);
     };
 
     class ReLU
@@ -1080,8 +1142,8 @@ namespace NeuralNetwork
     private:
         /* data */
     public:
-        SoftMax(/* args */);
-        ~SoftMax();
+        SoftMax(/* args */) = default;
+        ~SoftMax() = default;
         void forward(const Math::Matrix<float> &input, Math::Matrix<float> &output) const;
         void forward(Math::Matrix<float> &input) const;
 
@@ -1094,11 +1156,36 @@ namespace NeuralNetwork
         SoftMax softmax;
 
     public:
-        CrossEntropyLoss(/* args */);
-        ~CrossEntropyLoss();
+        CrossEntropyLoss(/* args */) = default;
+        ~CrossEntropyLoss() = default;
 
         // input[10*batch_size],target[batch_size*1]
         float forward(Math::Matrix<float> &input, Math::Matrix<int> &target) const;
+    };
+
+    class MLP
+    {
+    private:
+        uint input_features;
+        uint hidden_features;
+        uint num_classes;
+        Linear fc1;
+        ReLU relu;
+        Linear fc2;
+        SoftMax softmax;
+        CrossEntropyLoss cross_entropy_loss;
+        Math::Matrix<float> fc1_output;
+        Math::Matrix<float> relu_output;
+        Math::Matrix<float> fc2_output;
+
+    public:
+        MLP(uint input_features, uint hidden_features, uint num_classes);
+        ~MLP();
+        void forward(const Math::Matrix<float> &input);
+        void backward(const Math::Matrix<float> &grad_output);
+        void update_weights(float learning_rate);
+
+        void train(DataSet::MnistData &train_data, float learning_rate, uint epochs);
     };
 
 } // namespace NeuralNetwork
@@ -1164,6 +1251,13 @@ namespace NeuralNetwork
         // grad_input=weights^T*grad_output
         this->weights.get_tmp_transpose_matrix_with_ref_data().multiply(grad_output, this->grad_input);
     }
+    void Linear::update_weights(float learning_rate)
+    {
+        this->grad_weights.multiply(-learning_rate, this->grad_weights);
+        this->weights.add_assign(this->grad_weights);
+        this->grad_bias.multiply(-learning_rate, this->grad_bias);
+        this->bias.add_assign(this->grad_bias);
+    }
 
 } // namespace NeuralNetwork
 
@@ -1218,6 +1312,16 @@ namespace NeuralNetwork
         CUDA_KERNELS::softmax_row_major<<<gridDim, blockDim>>>(input.gpu_device_data, input.rows_num, input.cols_num, output.gpu_device_data);
         output.copy_device_to_host();
     }
+
+    void SoftMax::forward(Math::Matrix<float> &input) const
+    {
+        assert(input.major_axis == Math::Axis::Row);
+        input.cuda();
+        dim3 blockDim(16, 16);
+        dim3 gridDim(CEIL_DIV(input.cols_num, blockDim.x), CEIL_DIV(input.rows_num, blockDim.y));
+        CUDA_KERNELS::softmax_row_major<<<gridDim, blockDim>>>(input.gpu_device_data, input.rows_num, input.cols_num, input.gpu_device_data);
+        input.copy_device_to_host();
+    }
 } // namespace NeuralNetwork
 
 namespace NeuralNetwork
@@ -1239,27 +1343,42 @@ namespace NeuralNetwork
     }
 } // namespace NeuralNetwork
 
-namespace DataSet
+namespace NeuralNetwork
 {
-    class MnistData
+
+    MLP::MLP(uint input_features, uint hidden_features, uint num_classes)
+        : input_features(input_features),
+          hidden_features(hidden_features),
+          num_classes(num_classes),
+          fc1(Linear(input_features, hidden_features)),
+          relu(ReLU()),
+          fc2(Linear(hidden_features, num_classes)),
+          softmax(SoftMax()),
+          cross_entropy_loss(CrossEntropyLoss()),
+          fc1_output(Math::Matrix<float>::zeros(hidden_features, 1)),
+          relu_output(Math::Matrix<float>::zeros(hidden_features, 1)),
+          fc2_output(Math::Matrix<float>::zeros(num_classes, 1))
     {
-    private:
-        std::string images_file_path;
-        std::string labels_file_path;
-        uint num_elements;
-        float *images_data;
-        uint *labels_data;
+    }
 
-    public:
-        MnistData(std::string images_file_path,
-                  std::string labels_file_path,
-                  uint num_elements);
-        ~MnistData();
+    void MLP::forward(const Math::Matrix<float> &input)
+    {
+        this->fc1.forward(input, this->fc1_output);
+        this->relu.forward(this->fc1_output);
+        this->fc2.forward(this->fc1_output, this->fc2_output);
+        this->softmax.forward(this->fc2_output);
+    }
 
-        void load_images_data();
-    };
-
-}
+    void MLP::backward(const Math::Matrix<float> &grad_output)
+    {
+        this->fc2.backward(grad_output, this->relu_output);
+        Math::Matrix<float> grad_relu_input = Math::Matrix<float>::zeros_like(this->fc1_output);
+        grad_relu_input.init_cuda();
+        grad_relu_input.cuda();
+        this->relu.backward(this->fc2.grad_input, this->fc1_output, grad_relu_input);
+        this->fc1.backward(grad_relu_input, this->fc1_output);
+    }
+} // namespace NeuralNetwork
 
 namespace DataSet
 {
@@ -1280,7 +1399,6 @@ namespace DataSet
         delete[] this->labels_data;
     }
 }
-
 int main()
 {
     // using namespace Math;
